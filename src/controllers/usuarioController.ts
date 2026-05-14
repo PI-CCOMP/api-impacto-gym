@@ -366,8 +366,12 @@ export async function excluirUsuario(
 
     await client.query("BEGIN");
     await UsuarioModel.excluirPorId(client, id);
-    await UsuarioModel.excluirNoAuth(rows[0].id_auth);
     await client.query("COMMIT");
+
+    const { error } = await UsuarioModel.excluirNoAuth(rows[0].id_auth);
+    if (error) {
+      console.error("Erro ao deletar no Auth:", error);
+    }
 
     res.json({ excluido: true });
   } catch (err) {
