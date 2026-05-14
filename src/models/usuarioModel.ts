@@ -225,6 +225,42 @@ export async function atualizarFoto(fotoUrl: string, idUsuario: number) {
   ]);
 }
 
+export async function buscarInstrutorDoAluno(idUsuario: string) {
+  return pool.query(
+    `SELECT a.id_instrutor, u.perfil AS perfil_instrutor
+     FROM alunos a
+     LEFT JOIN usuarios u ON u.id = a.id_instrutor
+     WHERE a.id_usuario = $1`,
+    [idUsuario],
+  );
+}
+
+export async function validarPerfilInstrutor(idInstrutor: number) {
+  return pool.query(
+    `SELECT id FROM usuarios WHERE id = $1 AND perfil IN ('instrutor', 'admin')`,
+    [idInstrutor],
+  );
+}
+
+export async function inativarTreinosDoAluno(client: any, idUsuario: string) {
+  return client.query(
+    `UPDATE aluno_treinos SET ativo = false
+     WHERE id_aluno = $1 AND ativo = true`,
+    [idUsuario],
+  );
+}
+
+export async function atualizarInstrutorDoAluno(
+  client: any,
+  idUsuario: string,
+  idInstrutor: number | null,
+) {
+  return client.query(
+    `UPDATE alunos SET id_instrutor = $1 WHERE id_usuario = $2 RETURNING id_usuario`,
+    [idInstrutor, idUsuario],
+  );
+}
+
 export async function desvincularTreino(
   idAluno: string,
   idAluno_treino: string,

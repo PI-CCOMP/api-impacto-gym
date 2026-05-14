@@ -436,6 +436,99 @@ export async function uploadFotoPerfil(
   }
 }
 
+export async function atualizarInstrutorDoAluno(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const isAdmin = req.user!.perfil === "admin";
+    const isInstrutor = req.user!.perfil === "instrutor";
+
+    let id_instrutor: number | null;
+
+    if (isInstrutor) {
+      // Instrutor se auto-atribui — ignora qualquer body
+      id_instrutor = req.user!.id_usuario;
+    } else if (isAdmin) {
+      // Admin precisa passar no body
+      if (!("id_instrutor" in req.body)) {
+        res.status(400).json({
+          erro: "id_instrutor é obrigatório no body.",
+          codigo: "CAMPOS_OBRIGATORIOS",
+        });
+        return;
+      }
+      id_instrutor = req.body.id_instrutor ?? null; // aceita null para desvincular
+    } else {
+      res
+        .status(403)
+        .json({ erro: "Acesso não autorizado.", codigo: "SEM_PERMISSAO" });
+      return;
+    }
+
+    const { rows: alunoRows } = await UsuarioModel.buscarPorId(id);
+    if (alunoRows.length === 0 || alunoRows[0].perfil !== "aluno") {
+      res
+        .status(404)
+        .json({ erro: "Aluno não encontrado.", codigo: "NAO_ENCONTRADO" });
+      return;
+    }
+
+    if (id_instrutor !== null) {
+      const { rows: perfilRows } =
+        await UsuarioModel.validarPerfilInstrutor(id_instrutor);
+      if (perfilRows.length === 0) {
+        res.status(422).json({
+          erro: "O usuário informado não possui perfil de instrutor ou admin.",
+          codigo: "PERFIL_INVALIDO",
+        });
+        return;
+      }
+    }
+
+    const { rows: instAtualRows } =
+      await UsuarioModel.buscarInstrutorDoAluno(id);
+    const instrutorAtual = instAtualRows[0]?.id_instrutor ?? null;
+    const estaTrocando =
+      instrutorAtual !== null && instrutorAtual !== id_instrutor;
+
+    await client.query("BEGIN");
+
+    if (estaTrocando) {
+      await UsuarioModel.inativarTreinosDoAluno(client, id);
+    }
+
+    const { rows } = await UsuarioModel.atualizarInstrutorDoAluno(
+      client,
+      id,
+      id_instrutor,
+    );
+    if (rows.length === 0) {
+      await client.query("ROLLBACK");
+      res
+        .status(404)
+        .json({ erro: "Aluno não encontrado.", codigo: "NAO_ENCONTRADO" });
+      return;
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      id_usuario: Number(id),
+      id_instrutor,
+      treinos_inativados: estaTrocando,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
 // DELETE /usuarios/:id/treinos/:id_aluno_treino
 export async function desvincularTreino(
   req: Request,

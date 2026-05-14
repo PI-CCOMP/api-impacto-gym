@@ -358,30 +358,51 @@ export async function vincularAluno(
     const { id_aluno } = req.body;
 
     if (!id_aluno) {
-      res
-        .status(400)
-        .json({ erro: "id_aluno obrigatório.", codigo: "CAMPOS_OBRIGATORIOS" });
+      res.status(400).json({
+        erro: "id_aluno obrigatório.",
+        codigo: "CAMPOS_OBRIGATORIOS",
+      });
       return;
     }
 
-    // RN07: instrutor só pode vincular seus próprios alunos
     if (req.user!.perfil === "instrutor") {
       const check = await TreinoModel.verificarAlunoDoInstrutor(
         id_aluno,
         req.user!.id_usuario,
       );
-      if (check.rows.length === 0) {
-        res.status(403).json({
-          erro: "Aluno não vinculado a este instrutor.",
-          codigo: "SEM_PERMISSAO",
-        });
-        return;
+      // exceção: aluno sem instrutor ainda — instrutor pode pegar
+      const { rows: instRows } =
+        await TreinoModel.buscarInstrutorDeTreino(id_treino);
+      const alunoSemInstrutor = check.rows.length === 0;
+
+      if (alunoSemInstrutor) {
+        // valida ao menos que o treino é deste instrutor
+        if (instRows[0]?.id_instrutor !== req.user!.id_usuario) {
+          res.status(403).json({
+            erro: "Somente o instrutor responsável pelo aluno pode vincular treinos a ele.",
+            codigo: "INSTRUTOR_INCOMPATIVEL",
+          });
+          return;
+        }
       }
+    }
+
+    const { rows: compatRows } =
+      await TreinoModel.verificarCompatibilidadeInstrutorTreino(
+        id_treino,
+        id_aluno,
+      );
+
+    if (compatRows.length === 0) {
+      res.status(403).json({
+        erro: "Este treino pertence a outro instrutor. Somente o instrutor responsável pelo aluno pode vincular treinos a ele.",
+        codigo: "INSTRUTOR_INCOMPATIVEL",
+      });
+      return;
     }
 
     await client.query("BEGIN");
 
-    // RN18: copia os exercícios do treino-modelo para o aluno
     const { rows } = await TreinoModel.vincularAlunoATreino(
       client,
       id_aluno,
@@ -389,10 +410,10 @@ export async function vincularAluno(
     );
     const id_aluno_treino = rows[0].id;
 
+    // RN18: copia exercícios do treino-modelo para o aluno
     const { rows: exRows } =
       await TreinoModel.buscarExerciciosModeloTreino(id_treino);
     for (const ex of exRows) {
-      // RN18: gera uma linha por série (1..ex.series), não usa ordem como numero_serie
       for (let s = 1; s <= ex.series; s++) {
         await TreinoModel.inserirAluno_treinoExercicio(client, {
           idAluno_treino: id_aluno_treino,
@@ -403,6 +424,15 @@ export async function vincularAluno(
           tempoDescanso: ex.tempo_descanso,
         });
       }
+    }
+
+    // Se aluno não tinha instrutor e quem vincula é instrutor → atribui automaticamente
+    if (req.user!.perfil === "instrutor") {
+      await TreinoModel.atribuirInstrutorSeNulo(
+        client,
+        id_aluno,
+        req.user!.id_usuario,
+      );
     }
 
     await client.query("COMMIT");

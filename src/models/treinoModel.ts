@@ -32,6 +32,42 @@ export async function buscarAluno_treino(
   );
 }
 
+export async function buscarInstrutorDeTreino(idTreino: string) {
+  return pool.query(`SELECT id_instrutor FROM treinos WHERE id = $1`, [
+    idTreino,
+  ]);
+}
+
+export async function verificarCompatibilidadeInstrutorTreino(
+  idTreino: string,
+  idAluno: number,
+) {
+  return pool.query(
+    `SELECT t.id_instrutor AS instrutor_do_treino, a.id_instrutor AS instrutor_do_aluno
+     FROM treinos t
+     JOIN alunos a ON a.id_usuario = $2
+     WHERE t.id = $1
+       AND (
+         a.id_instrutor IS NULL
+         OR a.id_instrutor = t.id_instrutor
+       )`,
+    [idTreino, idAluno],
+  );
+}
+
+export async function atribuirInstrutorSeNulo(
+  client: any,
+  idAluno: number,
+  idInstrutor: number,
+) {
+  return client.query(
+    `UPDATE alunos SET id_instrutor = $1
+     WHERE id_usuario = $2 AND id_instrutor IS NULL
+     RETURNING id_usuario`,
+    [idInstrutor, idAluno],
+  );
+}
+
 export async function buscarExerciciosDoAluno_treino(idAluno_treino: string) {
   return pool.query(
     `SELECT
