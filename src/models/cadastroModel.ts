@@ -97,6 +97,7 @@ export async function listar(filtros: {
   return pool.query(
     `SELECT
        u.id AS id_aluno, u.nome, u.cpf,
+       a.deficiencia, a.restricao_medica,
        d.id AS id_documento, d.caminho_arquivo, d.nome_arquivo,
        u.criado_em AS enviado_em,
        COUNT(*) OVER() AS total
@@ -125,6 +126,22 @@ export async function aprovar(idAluno: string) {
 export async function aprovarDocumentos(idAluno: string) {
   return pool.query(
     `UPDATE documentos_comprobatorios SET status = 'aprovado' WHERE id_aluno = $1`,
+    [idAluno],
+  );
+}
+
+export async function buscarAlunoPendenteParaAprovar(idAluno: string) {
+  return pool.query(
+    `SELECT
+       u.id,
+       (a.deficiencia <> 'nenhuma' OR a.restricao_medica <> 'nenhuma') AS tem_restricao,
+       EXISTS (
+         SELECT 1 FROM documentos_comprobatorios d
+         WHERE d.id_aluno = u.id
+       ) AS tem_documento
+     FROM usuarios u
+     JOIN alunos a ON a.id_usuario = u.id
+     WHERE u.id = $1 AND a.status = 'pendente'`,
     [idAluno],
   );
 }

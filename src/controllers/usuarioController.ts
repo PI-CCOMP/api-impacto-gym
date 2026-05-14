@@ -44,7 +44,11 @@ export async function listarUsuarios(
         cpf: r.cpf,
         perfil: r.perfil,
         email: r.email,
-        instrutor_vinculado: r.instrutor_vinculado ?? null,
+        status: r.status ?? null,
+        instrutor_vinculado:
+          r.perfil === "aluno" && r.status === "ativo"
+            ? (r.instrutor_vinculado ?? null)
+            : undefined,
       })),
       total,
       pagina,
@@ -187,22 +191,18 @@ export async function criarUsuario(
     const { nome, cpf, email, senha, sexo, perfil, foto_url, aluno } = req.body;
 
     if (!nome || !cpf || !email || !senha || !sexo || !perfil) {
-      res
-        .status(400)
-        .json({
-          erro: "Campos obrigatórios ausentes.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+      res.status(400).json({
+        erro: "Campos obrigatórios ausentes.",
+        codigo: "CAMPOS_OBRIGATORIOS",
+      });
       return;
     }
     const nomeTrimmed = nome.trim();
     if (nomeTrimmed.length < 3) {
-      res
-        .status(422)
-        .json({
-          erro: "Nome deve ter no mínimo 3 caracteres.",
-          codigo: "NOME_INVALIDO",
-        });
+      res.status(422).json({
+        erro: "Nome deve ter no mínimo 3 caracteres.",
+        codigo: "NOME_INVALIDO",
+      });
       return;
     }
     if (!validarEmail(email)) {
@@ -386,12 +386,10 @@ export async function uploadFotoPerfil(
 ): Promise<void> {
   try {
     if (!req.file) {
-      res
-        .status(400)
-        .json({
-          erro: "Arquivo de imagem obrigatório.",
-          codigo: "ARQUIVO_AUSENTE",
-        });
+      res.status(400).json({
+        erro: "Arquivo de imagem obrigatório.",
+        codigo: "ARQUIVO_AUSENTE",
+      });
       return;
     }
 

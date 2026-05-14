@@ -37,22 +37,18 @@ export async function cadastrarAluno(
     } = req.body;
 
     if (!nome || !cpf || !email || !senha || !sexo || !objetivo || !nivel) {
-      res
-        .status(400)
-        .json({
-          erro: "Campos obrigatórios ausentes.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+      res.status(400).json({
+        erro: "Campos obrigatórios ausentes.",
+        codigo: "CAMPOS_OBRIGATORIOS",
+      });
       return;
     }
     const nomeTrimmed = nome.trim();
     if (nomeTrimmed.length < 3) {
-      res
-        .status(422)
-        .json({
-          erro: "Nome deve ter no mínimo 3 caracteres.",
-          codigo: "NOME_INVALIDO",
-        });
+      res.status(422).json({
+        erro: "Nome deve ter no mínimo 3 caracteres.",
+        codigo: "NOME_INVALIDO",
+      });
       return;
     }
     if (!validarEmail(email)) {
@@ -99,21 +95,17 @@ export async function cadastrarAluno(
       .replace(/\s+/g, "_") as any;
 
     if (!DEFICIENCIAS_VALIDAS.includes(deficienciaVal)) {
-      res
-        .status(422)
-        .json({
-          erro: "Valor de deficiência inválido.",
-          codigo: "ENUM_INVALIDO",
-        });
+      res.status(422).json({
+        erro: "Valor de deficiência inválido.",
+        codigo: "ENUM_INVALIDO",
+      });
       return;
     }
     if (!RESTRICOES_VALIDAS.includes(restricaoVal)) {
-      res
-        .status(422)
-        .json({
-          erro: "Valor de restrição médica inválido.",
-          codigo: "ENUM_INVALIDO",
-        });
+      res.status(422).json({
+        erro: "Valor de restrição médica inválido.",
+        codigo: "ENUM_INVALIDO",
+      });
       return;
     }
 
@@ -140,7 +132,7 @@ export async function cadastrarAluno(
     // RN12: status pendente se tiver restrição médica ou deficiência
     const temRestricao =
       deficienciaVal !== "nenhuma" || restricaoVal !== "nenhuma";
-    const status = temRestricao ? "pendente" : "ativo";
+    const status = "pendente";
 
     await client.query("BEGIN");
 
@@ -191,23 +183,19 @@ export async function uploadDocumento(
 
     const { rows } = await CadastroModel.buscarAlunoPendente(id_aluno);
     if (rows.length === 0) {
-      res
-        .status(404)
-        .json({
-          erro: "Aluno pendente não encontrado.",
-          codigo: "NAO_ENCONTRADO",
-        });
+      res.status(404).json({
+        erro: "Aluno pendente não encontrado.",
+        codigo: "NAO_ENCONTRADO",
+      });
       return;
     }
 
     // Só aceita laudo se o aluno de fato declarou restrição/deficiência
     if (!rows[0].tem_restricao) {
-      res
-        .status(422)
-        .json({
-          erro: "Aluno não declarou restrição médica ou deficiência.",
-          codigo: "SEM_RESTRICAO",
-        });
+      res.status(422).json({
+        erro: "Aluno não declarou restrição médica ou deficiência.",
+        codigo: "SEM_RESTRICAO",
+      });
       return;
     }
 
@@ -277,6 +265,8 @@ export async function listarCadastros(
             }
           : null,
         enviado_em: r.enviado_em,
+        deficiencia: r.deficiencia,
+        restricao_medica: r.restricao_medica,
       })),
       total,
       pagina,
@@ -295,16 +285,39 @@ export async function aprovarCadastro(
 ): Promise<void> {
   try {
     const { id_aluno } = req.params;
-    const { rows } = await CadastroModel.aprovar(id_aluno);
-    if (rows.length === 0) {
-      res
-        .status(404)
-        .json({
-          erro: "Cadastro pendente não encontrado.",
-          codigo: "NAO_ENCONTRADO",
-        });
+
+    // Busca aluno pendente com info de restrição e documento
+    const { rows: alunoRows } =
+      await CadastroModel.buscarAlunoPendenteParaAprovar(id_aluno);
+
+    if (alunoRows.length === 0) {
+      res.status(404).json({
+        erro: "Cadastro pendente não encontrado.",
+        codigo: "NAO_ENCONTRADO",
+      });
       return;
     }
+
+    const aluno = alunoRows[0];
+
+    // Se tem restrição, exige documento PDF aprovado (ou pendente)
+    if (aluno.tem_restricao && !aluno.tem_documento) {
+      res.status(422).json({
+        erro: "Aluno declarou restrição/deficiência mas não possui laudo anexado.",
+        codigo: "DOCUMENTO_AUSENTE",
+      });
+      return;
+    }
+
+    const { rows } = await CadastroModel.aprovar(id_aluno);
+    if (rows.length === 0) {
+      res.status(404).json({
+        erro: "Cadastro pendente não encontrado.",
+        codigo: "NAO_ENCONTRADO",
+      });
+      return;
+    }
+
     await CadastroModel.aprovarDocumentos(id_aluno);
     res.json({ id_aluno: Number(id_aluno), status: "ativo" });
   } catch (err) {
@@ -323,23 +336,19 @@ export async function rejeitarCadastro(
     const { motivo_rejeicao } = req.body;
 
     if (!motivo_rejeicao) {
-      res
-        .status(400)
-        .json({
-          erro: "motivo_rejeicao obrigatório.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+      res.status(400).json({
+        erro: "motivo_rejeicao obrigatório.",
+        codigo: "CAMPOS_OBRIGATORIOS",
+      });
       return;
     }
 
     const { rows } = await CadastroModel.rejeitar(id_aluno);
     if (rows.length === 0) {
-      res
-        .status(404)
-        .json({
-          erro: "Cadastro pendente não encontrado.",
-          codigo: "NAO_ENCONTRADO",
-        });
+      res.status(404).json({
+        erro: "Cadastro pendente não encontrado.",
+        codigo: "NAO_ENCONTRADO",
+      });
       return;
     }
     await CadastroModel.rejeitarDocumentos(id_aluno, motivo_rejeicao);

@@ -13,6 +13,7 @@ export async function listar(filtros: {
   return pool.query(
     `SELECT
        u.id AS id_usuario, u.nome, u.cpf, u.perfil, u.email,
+       a.status,
        ui.nome AS instrutor_vinculado,
        COUNT(*) OVER() AS total
      FROM usuarios u
