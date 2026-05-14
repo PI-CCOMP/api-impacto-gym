@@ -50,7 +50,7 @@ export async function inserirAluno(
   return client.query(
     `INSERT INTO alunos (id_usuario, deficiencia, restricao_medica, objetivo, nivel, status)
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id`,
+     RETURNING id_usuario`,
     [
       dados.idUsuario,
       dados.deficiencia || "nenhuma",
@@ -99,7 +99,7 @@ export async function listar(filtros: {
        u.id AS id_aluno, u.nome, u.cpf,
        a.deficiencia, a.restricao_medica,
        d.id AS id_documento, d.caminho_arquivo, d.nome_arquivo,
-       u.criado_em AS enviado_em,
+       u.criado_em AS cadastrado_em,
        COUNT(*) OVER() AS total
      FROM usuarios u
      JOIN alunos a ON a.id_usuario = u.id

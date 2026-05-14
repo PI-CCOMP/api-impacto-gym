@@ -264,7 +264,7 @@ export async function listarCadastros(
               nome_arquivo: r.nome_arquivo,
             }
           : null,
-        enviado_em: r.enviado_em,
+        cadastrado_em: r.cadastrado_em,
         deficiencia: r.deficiencia,
         restricao_medica: r.restricao_medica,
       })),
