@@ -7,18 +7,40 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 --  Enums 
-CREATE TYPE perfil_usuario    AS ENUM ('admin', 'instrutor', 'recepcionista', 'aluno');
-CREATE TYPE status_cadastro   AS ENUM ('pendente', 'ativo', 'rejeitado', 'inativo');
-CREATE TYPE status_documento  AS ENUM ('pendente', 'aprovado', 'rejeitado');
+CREATE TYPE perfil_usuario     AS ENUM ('admin', 'instrutor', 'recepcionista', 'aluno');
+CREATE TYPE status_cadastro    AS ENUM ('pendente', 'ativo', 'rejeitado', 'inativo');
+CREATE TYPE status_documento   AS ENUM ('pendente', 'aprovado', 'rejeitado');
 CREATE TYPE status_solicitacao AS ENUM ('aberto', 'atendido', 'cancelado');
-CREATE TYPE status_sessao     AS ENUM ('em_andamento', 'finalizado', 'abandonado');
-CREATE TYPE sexo_usuario      AS ENUM ('M', 'F', 'O');
-CREATE TYPE objetivo_aluno    AS ENUM ('hipertrofia','emagrecimento','condicionamento','forca','recomendacao_medica');
-CREATE TYPE nivel_aluno       AS ENUM ('iniciante','intermediario','avancado');
-CREATE TYPE grupo_muscular    AS ENUM ('Peitoral','Costas','Bracos','Pernas','Abdomen');
+CREATE TYPE status_sessao      AS ENUM ('em_andamento', 'finalizado', 'abandonado');
+CREATE TYPE sexo_usuario       AS ENUM ('M', 'F', 'O');
+CREATE TYPE objetivo_aluno     AS ENUM ('hipertrofia','emagrecimento','condicionamento','forca','recomendacao_medica');
+CREATE TYPE nivel_aluno        AS ENUM ('iniciante','intermediario','avancado');
+CREATE TYPE grupo_muscular     AS ENUM ('Peitoral','Costas','Bracos','Pernas','Abdomen');
+
+-- [NOVO] Enum para deficiência (antes era TEXT livre)
+CREATE TYPE deficiencia_aluno AS ENUM (
+  'nenhuma',
+  'visual',
+  'auditiva',
+  'motora',
+  'intelectual',
+  'multipla',
+  'outra'
+);
+
+-- [NOVO] Enum para restrição médica (antes era TEXT livre)
+CREATE TYPE restricao_medica_aluno AS ENUM (
+  'nenhuma',
+  'problemas_cardiacos',
+  'dores_no_peito',
+  'tontura_ou_desmaios',
+  'problemas_osseos',
+  'medicamentos',
+  'cirurgias_recentes',
+  'outra'
+);
 
 --  usuarios 
--- id_auth referencia auth.users do Supabase Auth
 CREATE TABLE usuarios (
   id         BIGSERIAL          PRIMARY KEY,
   id_auth    UUID               NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -32,16 +54,17 @@ CREATE TABLE usuarios (
 );
 
 --  alunos 
+-- [ALTERADO] Removido id BIGSERIAL próprio — id_usuario é agora a PK (relação 1-para-1)
+-- [ALTERADO] deficiencia e restricao_medica agora usam enums tipados
 CREATE TABLE alunos (
-  id                BIGSERIAL         PRIMARY KEY,
-  id_usuario        BIGINT            NOT NULL UNIQUE REFERENCES usuarios(id) ON DELETE CASCADE,
-  objetivo          objetivo_aluno    NOT NULL,
-  nivel             nivel_aluno       NOT NULL,
-  deficiencia       TEXT              NOT NULL DEFAULT 'nenhuma',
-  restricao_medica  TEXT              NOT NULL DEFAULT 'nenhuma',
-  status            status_cadastro   NOT NULL DEFAULT 'pendente',
-  id_instrutor      BIGINT            REFERENCES usuarios(id) ON DELETE SET NULL,
-  criado_em         TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+  id_usuario        BIGINT                  PRIMARY KEY REFERENCES usuarios(id) ON DELETE CASCADE,
+  objetivo          objetivo_aluno          NOT NULL,
+  nivel             nivel_aluno             NOT NULL,
+  deficiencia       deficiencia_aluno       NOT NULL DEFAULT 'nenhuma',
+  restricao_medica  restricao_medica_aluno  NOT NULL DEFAULT 'nenhuma',
+  status            status_cadastro         NOT NULL DEFAULT 'pendente',
+  id_instrutor      BIGINT                  REFERENCES usuarios(id) ON DELETE SET NULL,
+  criado_em         TIMESTAMPTZ             NOT NULL DEFAULT NOW()
 );
 
 --  documentos_comprobatorios 
@@ -69,23 +92,23 @@ CREATE TABLE exercicios (
 
 --  treinos 
 CREATE TABLE treinos (
-  id               BIGSERIAL          PRIMARY KEY,
-  nome             VARCHAR(120)       NOT NULL,
-  grupos_musculares grupo_muscular[]  NOT NULL DEFAULT '{}',
-  id_instrutor     BIGINT             NOT NULL REFERENCES usuarios(id),
-  criado_em        TIMESTAMPTZ        NOT NULL DEFAULT NOW()
+  id                BIGSERIAL          PRIMARY KEY,
+  nome              VARCHAR(120)       NOT NULL,
+  grupos_musculares grupo_muscular[]   NOT NULL DEFAULT '{}',
+  id_instrutor      BIGINT             NOT NULL REFERENCES usuarios(id),
+  criado_em         TIMESTAMPTZ        NOT NULL DEFAULT NOW()
 );
 
 --  treino_exercicios (template — modelo do instrutor) 
 CREATE TABLE treino_exercicios (
-  id             BIGSERIAL  PRIMARY KEY,
-  id_treino      BIGINT     NOT NULL REFERENCES treinos(id) ON DELETE CASCADE,
-  id_exercicio   BIGINT     NOT NULL REFERENCES exercicios(id),
-  ordem          SMALLINT   NOT NULL,
-  series         SMALLINT   NOT NULL,
-  repeticoes     SMALLINT   NOT NULL,
+  id             BIGSERIAL    PRIMARY KEY,
+  id_treino      BIGINT       NOT NULL REFERENCES treinos(id) ON DELETE CASCADE,
+  id_exercicio   BIGINT       NOT NULL REFERENCES exercicios(id),
+  ordem          SMALLINT     NOT NULL,
+  series         SMALLINT     NOT NULL,
+  repeticoes     SMALLINT     NOT NULL,
   carga_sugerida NUMERIC(6,2) NOT NULL DEFAULT 0,
-  tempo_descanso SMALLINT   NOT NULL DEFAULT 60  -- segundos
+  tempo_descanso SMALLINT     NOT NULL DEFAULT 60
 );
 
 --  aluno_treinos (cópia exclusiva do treino para o aluno — RN18) 
@@ -105,7 +128,7 @@ CREATE TABLE aluno_treino_exercicios (
   numero_serie     SMALLINT      NOT NULL,
   repeticoes       SMALLINT      NOT NULL,
   carga_sugerida   NUMERIC(6,2)  NOT NULL DEFAULT 0,
-  carga_real       NUMERIC(6,2),          -- preenchido na execução
+  carga_real       NUMERIC(6,2),
   tempo_descanso   SMALLINT      NOT NULL DEFAULT 60
 );
 
@@ -130,17 +153,17 @@ CREATE TABLE sessao_series (
 
 --  historico_treinos 
 CREATE TABLE historico_treinos (
-  id               BIGSERIAL   PRIMARY KEY,
-  id_aluno         BIGINT      NOT NULL REFERENCES usuarios(id),
-  id_aluno_treino  BIGINT      NOT NULL REFERENCES aluno_treinos(id),
-  duracao_segundos INT         NOT NULL DEFAULT 0,
+  id               BIGSERIAL     PRIMARY KEY,
+  id_aluno         BIGINT        NOT NULL REFERENCES usuarios(id),
+  id_aluno_treino  BIGINT        NOT NULL REFERENCES aluno_treinos(id),
+  duracao_segundos INT           NOT NULL DEFAULT 0,
   volume_total     NUMERIC(10,2) NOT NULL DEFAULT 0,
-  criado_em        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  criado_em        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 
 --  avisos 
 CREATE TABLE avisos (
-  id        BIGSERIAL   PRIMARY KEY,
+  id        BIGSERIAL    PRIMARY KEY,
   titulo    VARCHAR(200) NOT NULL,
   mensagem  TEXT         NOT NULL,
   id_autor  BIGINT       NOT NULL REFERENCES usuarios(id),
@@ -149,12 +172,12 @@ CREATE TABLE avisos (
 
 --  solicitacoes_auxilio 
 CREATE TABLE solicitacoes_auxilio (
-  id                           BIGSERIAL          PRIMARY KEY,
-  id_aluno                     BIGINT             NOT NULL REFERENCES usuarios(id),
-  id_aluno_treino_exercicio    BIGINT             NOT NULL REFERENCES aluno_treino_exercicios(id),
-  id_instrutor                 BIGINT             REFERENCES usuarios(id),
-  status                       status_solicitacao NOT NULL DEFAULT 'aberto',
-  criado_em                    TIMESTAMPTZ        NOT NULL DEFAULT NOW()
+  id                         BIGSERIAL          PRIMARY KEY,
+  id_aluno                   BIGINT             NOT NULL REFERENCES usuarios(id),
+  id_aluno_treino_exercicio  BIGINT             NOT NULL REFERENCES aluno_treino_exercicios(id),
+  id_instrutor               BIGINT             REFERENCES usuarios(id),
+  status                     status_solicitacao NOT NULL DEFAULT 'aberto',
+  criado_em                  TIMESTAMPTZ        NOT NULL DEFAULT NOW()
 );
 
 --  Índices 
@@ -169,8 +192,6 @@ CREATE INDEX idx_solicitacoes_status    ON solicitacoes_auxilio(status);
 CREATE INDEX idx_avisos_criado_em       ON avisos(criado_em DESC);
 
 --  Row Level Security (RLS) 
--- A API usa service_role (bypassa RLS), mas habilitamos RLS em todas as tabelas
--- como camada extra de defesa contra acessos diretos acidentais.
 ALTER TABLE usuarios                  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alunos                    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documentos_comprobatorios ENABLE ROW LEVEL SECURITY;
@@ -185,8 +206,6 @@ ALTER TABLE historico_treinos         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE avisos                    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE solicitacoes_auxilio      ENABLE ROW LEVEL SECURITY;
 
--- Políticas permissivas apenas para service_role (nossa API)
--- Conexões externas diretas sem service_role não conseguem ler/escrever.
 CREATE POLICY "service_role_all" ON usuarios                  FOR ALL TO service_role USING (true);
 CREATE POLICY "service_role_all" ON alunos                    FOR ALL TO service_role USING (true);
 CREATE POLICY "service_role_all" ON documentos_comprobatorios FOR ALL TO service_role USING (true);
