@@ -17,6 +17,14 @@ export async function buscarUsuarioPorAuthId(authId: string) {
   return rows[0] ?? null;
 }
 
+export async function buscarEmailPorAuthId(authId: string) {
+  const { rows } = await pool.query<{ email: string }>(
+    "SELECT email FROM usuarios WHERE id_auth = $1",
+    [authId],
+  );
+  return rows[0]?.email ?? null;
+}
+
 export async function buscarEmailExistente(email: string) {
   const { rows } = await pool.query("SELECT 1 FROM usuarios WHERE email = $1", [
     email,
@@ -56,5 +64,5 @@ export async function refreshSession(refreshToken: string) {
 
 // Revoga todos os tokens ativos do usuário (logout global)
 export async function signOut(authId: string) {
-  return supabaseAdmin.auth.admin.signOut(authId, 'global');
+  return supabaseAdmin.auth.admin.signOut(authId, "global");
 }
