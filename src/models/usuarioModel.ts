@@ -47,7 +47,7 @@ export async function buscarPorId(id: string) {
   return pool.query(
     `SELECT
        u.id AS id_usuario, u.nome, u.cpf, u.email, u.sexo, u.foto_url, u.perfil, u.criado_em,
-       a.id AS id_aluno, a.nivel, a.objetivo, a.deficiencia, a.restricao_medica, a.status, a.id_instrutor
+       a.id, a.nivel, a.objetivo, a.deficiencia, a.restricao_medica, a.status, a.id_instrutor
      FROM usuarios u
      LEFT JOIN alunos a ON a.id_usuario = u.id
      WHERE u.id = $1`,
@@ -130,7 +130,7 @@ export async function inserirAluno(
 ) {
   return client.query(
     `INSERT INTO alunos (id_usuario, objetivo, nivel, deficiencia, restricao_medica, status)
-     VALUES ($1, $2::objetivo_aluno, $3::nivel_aluno, $4, $5, $6::status_cadastro)`,
+     VALUES ($1, $2::objetivo_aluno, $3::nivel_aluno, $4::deficiencia_aluno, $5::restricao_medica_aluno, $6::status_cadastro)`,
     [
       dados.idUsuario,
       dados.objetivo,
@@ -187,8 +187,8 @@ export async function atualizarAluno(
     `UPDATE alunos SET
        objetivo = COALESCE($1::objetivo_aluno, objetivo),
        nivel = COALESCE($2::nivel_aluno, nivel),
-       deficiencia = COALESCE($3, deficiencia),
-       restricao_medica = COALESCE($4, restricao_medica),
+       deficiencia = COALESCE($3::deficiencia_aluno, deficiencia),
+       restricao_medica = COALESCE($4::restricao_medica_aluno, restricao_medica),
        id_instrutor = $5
      WHERE id_usuario = $6`,
     [

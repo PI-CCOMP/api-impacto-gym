@@ -162,9 +162,9 @@ export async function buscarUsuario(
       foto_url: r.foto_url,
       perfil: r.perfil,
       criado_em: r.criado_em,
-      aluno: r.id_aluno
+      aluno: r.nivel // checa se tem dados de aluno pelo campo nivel
         ? {
-            id_aluno: r.id_aluno,
+            id_aluno: r.id_usuario,
             nivel: r.nivel,
             objetivo: r.objetivo,
             deficiencia: r.deficiencia,
