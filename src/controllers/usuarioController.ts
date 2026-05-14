@@ -148,7 +148,6 @@ export async function buscarUsuario(
       return;
     }
 
-    // aluno_treinos.id_aluno é FK para usuarios(id), não alunos(id) — usar id_usuario
     const { rows: treinos } = await UsuarioModel.buscarTreinosDoAluno(
       r.id_usuario,
     );
@@ -162,7 +161,8 @@ export async function buscarUsuario(
       foto_url: r.foto_url,
       perfil: r.perfil,
       criado_em: r.criado_em,
-      aluno: r.nivel // checa se tem dados de aluno pelo campo nivel
+      // [CORRIGIDO] id_aluno removido — usar id_usuario como identificador único
+      aluno: r.nivel
         ? {
             id_aluno: r.id_usuario,
             nivel: r.nivel,
@@ -272,7 +272,7 @@ export async function criarUsuario(
         nivel: aluno.nivel,
         deficiencia: aluno.deficiencia || "nenhuma",
         restricaoMedica: aluno.restricao_medica || "nenhuma",
-        status: "ativo", // criado pelo admin: ativo diretamente (RN14)
+        status: "ativo",
       });
     }
 
@@ -450,10 +450,8 @@ export async function atualizarInstrutorDoAluno(
     let id_instrutor: number | null;
 
     if (isInstrutor) {
-      // Instrutor se auto-atribui — ignora qualquer body
       id_instrutor = req.user!.id_usuario;
     } else if (isAdmin) {
-      // Admin precisa passar no body
       if (!("id_instrutor" in req.body)) {
         res.status(400).json({
           erro: "id_instrutor é obrigatório no body.",
@@ -461,7 +459,7 @@ export async function atualizarInstrutorDoAluno(
         });
         return;
       }
-      id_instrutor = req.body.id_instrutor ?? null; // aceita null para desvincular
+      id_instrutor = req.body.id_instrutor ?? null;
     } else {
       res
         .status(403)

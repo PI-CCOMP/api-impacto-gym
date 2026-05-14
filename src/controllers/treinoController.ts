@@ -309,17 +309,6 @@ export async function excluirTreino(
   try {
     const { id_treino } = req.params;
 
-    // RN22: não pode excluir se houver alunos vinculados
-    const { rows: vinculos } =
-      await TreinoModel.verificarAlunosVinculados(id_treino);
-    if (vinculos.length > 0) {
-      res.status(409).json({
-        erro: "Treino possui alunos vinculados.",
-        codigo: "TREINO_EM_USO",
-      });
-      return;
-    }
-
     if (req.user!.perfil === "instrutor") {
       const check = await TreinoModel.verificarDonoTreino(
         id_treino,
@@ -331,6 +320,17 @@ export async function excluirTreino(
           .json({ erro: "Acesso não autorizado.", codigo: "SEM_PERMISSAO" });
         return;
       }
+    }
+
+    // [CORRIGIDO] Não permite excluir treino com alunos vinculados
+    const { rows: vinculados } =
+      await TreinoModel.verificarAlunosVinculados(id_treino);
+    if (vinculados.length > 0) {
+      res.status(409).json({
+        erro: "Treino possui alunos vinculados e não pode ser excluído.",
+        codigo: "TREINO_VINCULADO",
+      });
+      return;
     }
 
     const { rows } = await TreinoModel.excluirTreinoPorId(id_treino);
@@ -370,13 +370,11 @@ export async function vincularAluno(
         id_aluno,
         req.user!.id_usuario,
       );
-      // exceção: aluno sem instrutor ainda — instrutor pode pegar
       const { rows: instRows } =
         await TreinoModel.buscarInstrutorDeTreino(id_treino);
       const alunoSemInstrutor = check.rows.length === 0;
 
       if (alunoSemInstrutor) {
-        // valida ao menos que o treino é deste instrutor
         if (instRows[0]?.id_instrutor !== req.user!.id_usuario) {
           res.status(403).json({
             erro: "Somente o instrutor responsável pelo aluno pode vincular treinos a ele.",
@@ -410,7 +408,6 @@ export async function vincularAluno(
     );
     const id_aluno_treino = rows[0].id;
 
-    // RN18: copia exercícios do treino-modelo para o aluno
     const { rows: exRows } =
       await TreinoModel.buscarExerciciosModeloTreino(id_treino);
     for (const ex of exRows) {
@@ -426,7 +423,6 @@ export async function vincularAluno(
       }
     }
 
-    // Se aluno não tinha instrutor e quem vincula é instrutor → atribui automaticamente
     if (req.user!.perfil === "instrutor") {
       await TreinoModel.atribuirInstrutorSeNulo(
         client,
@@ -548,11 +544,21 @@ export async function criarExercicio(
       return;
     }
 
+    // [CORRIGIDO] Pelo menos foto_url ou video_url obrigatório
+    if (!foto_url && !video_url) {
+      res.status(400).json({
+        erro: "Informe ao menos foto_url ou video_url.",
+        codigo: "CAMPOS_OBRIGATORIOS",
+      });
+      return;
+    }
+
     const { rows } = await TreinoModel.inserirExercicio({
       nome: nome.trim(),
       grupoMuscular: grupo_muscular,
-      fotoUrl: foto_url ?? null,
-      videoUrl: video_url ?? null,
+      // [CORRIGIDO] Se só um vier, usa para os dois
+      fotoUrl: foto_url ?? video_url,
+      videoUrl: video_url ?? foto_url,
       imagemAtivacaoUrl: imagem_ativacao_muscular_url ?? null,
     });
 

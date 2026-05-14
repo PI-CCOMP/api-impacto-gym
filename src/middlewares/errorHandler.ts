@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express'
+import { Request, Response, NextFunction } from "express";
 
 /**
  * Handler de erros centralizado.
@@ -8,18 +8,20 @@ export function errorHandler(
   err: any,
   _req: Request,
   res: Response,
-  _next: NextFunction
+  _next: NextFunction,
 ): void {
   // Log interno apenas — nunca retorna ao cliente
-  console.error('[ERROR]', err?.message ?? err)
+  console.error("[ERROR]", err?.message ?? err);
 
-  const status: number = typeof err?.status === 'number' ? err.status : 500
+  const status: number = typeof err?.status === "number" ? err.status : 500;
 
   // Apenas erros marcados como seguros para exposição são devolvidos
   const mensagem =
-    err?.expose === true && typeof err?.message === 'string'
+    err?.expose === true && typeof err?.message === "string"
       ? err.message
-      : 'Erro interno no servidor.'
+      : "Erro interno no servidor.";
 
-  res.status(status).json({ erro: mensagem, codigo: err?.codigo ?? 'ERRO_INTERNO' })
+  res
+    .status(status)
+    .json({ erro: mensagem, codigo: err?.codigo ?? "ERRO_INTERNO" });
 }

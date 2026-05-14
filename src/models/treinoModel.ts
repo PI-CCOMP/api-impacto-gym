@@ -82,7 +82,7 @@ export async function buscarExerciciosDoAluno_treino(idAluno_treino: string) {
      JOIN exercicios e ON e.id = ate.id_exercicio
      WHERE ate.id_aluno_treino = $1
      GROUP BY e.id, e.nome, e.foto_url, e.video_url, e.imagem_ativacao_muscular_url, e.grupo_muscular
-     ORDER BY ate.numero_serie`,
+     ORDER BY MIN(ate.numero_serie)`,
     [idAluno_treino],
   );
 }
@@ -309,7 +309,7 @@ export async function listarExercicios(filtros: {
   offset: number;
 }) {
   return pool.query(
-    `SELECT id AS id_exercicio, nome, foto_url, grupo_muscular, ativo,
+    `SELECT id AS id_exercicio, nome, foto_url, video_url, grupo_muscular, ativo,
             COUNT(*) OVER() AS total
      FROM exercicios
      WHERE ativo = true

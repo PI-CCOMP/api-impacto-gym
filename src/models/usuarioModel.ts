@@ -9,7 +9,6 @@ export async function listar(filtros: {
   porPagina: number;
   offset: number;
 }) {
-  // perfil_usuario é um enum no postgres — cast explícito necessário ao comparar com texto
   return pool.query(
     `SELECT
        u.id AS id_usuario, u.nome, u.cpf, u.perfil, u.email,
@@ -47,7 +46,7 @@ export async function buscarPorId(id: string) {
   return pool.query(
     `SELECT
        u.id AS id_usuario, u.nome, u.cpf, u.email, u.sexo, u.foto_url, u.perfil, u.criado_em,
-       a.id, a.nivel, a.objetivo, a.deficiencia, a.restricao_medica, a.status, a.id_instrutor
+       a.nivel, a.objetivo, a.deficiencia, a.restricao_medica, a.status, a.id_instrutor
      FROM usuarios u
      LEFT JOIN alunos a ON a.id_usuario = u.id
      WHERE u.id = $1`,
@@ -129,6 +128,7 @@ export async function inserirAluno(
   },
 ) {
   return client.query(
+    // [CORRIGIDO] casts explícitos para os novos enums deficiencia_aluno e restricao_medica_aluno
     `INSERT INTO alunos (id_usuario, objetivo, nivel, deficiencia, restricao_medica, status)
      VALUES ($1, $2::objetivo_aluno, $3::nivel_aluno, $4::deficiencia_aluno, $5::restricao_medica_aluno, $6::status_cadastro)`,
     [
@@ -153,21 +153,22 @@ export async function atualizar(
     fotoUrl?: string;
   },
 ) {
+  // [CORRIGIDO] cast $5::boolean evita erro "could not determine data type of parameter $4"
   return pool.query(
     `UPDATE usuarios SET
        nome = COALESCE($1, nome),
        email = COALESCE($2, email),
        sexo = COALESCE($3::sexo_usuario, sexo),
-       perfil = CASE WHEN $4 IS NOT NULL AND $5 = false THEN $4::perfil_usuario ELSE perfil END,
+       perfil = CASE WHEN $4 IS NOT NULL AND $5::boolean = false THEN $4::perfil_usuario ELSE perfil END,
        foto_url = COALESCE($6, foto_url)
      WHERE id = $7`,
     [
-      dados.nome || null,
-      dados.email || null,
-      dados.sexo || null,
-      dados.perfil || null,
+      dados.nome ?? null,
+      dados.email ?? null,
+      dados.sexo ?? null,
+      dados.perfil ?? null,
       dados.isRecepcionista,
-      dados.fotoUrl || null,
+      dados.fotoUrl ?? null,
       id,
     ],
   );
@@ -183,6 +184,7 @@ export async function atualizarAluno(
     idInstrutor?: number | null;
   },
 ) {
+  // [CORRIGIDO] casts explícitos para os novos enums
   return pool.query(
     `UPDATE alunos SET
        objetivo = COALESCE($1::objetivo_aluno, objetivo),
@@ -192,10 +194,10 @@ export async function atualizarAluno(
        id_instrutor = $5
      WHERE id_usuario = $6`,
     [
-      dados.objetivo || null,
-      dados.nivel || null,
-      dados.deficiencia || null,
-      dados.restricaoMedica || null,
+      dados.objetivo ?? null,
+      dados.nivel ?? null,
+      dados.deficiencia ?? null,
+      dados.restricaoMedica ?? null,
       dados.idInstrutor ?? null,
       idUsuario,
     ],
