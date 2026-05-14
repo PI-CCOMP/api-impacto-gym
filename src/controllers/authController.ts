@@ -12,10 +12,12 @@ export async function login(
     const { email, senha } = req.body;
 
     if (!email || !senha || !email.trim() || !senha.trim()) {
-      res.status(400).json({
-        erro: "Email e senha são obrigatórios.",
-        codigo: "CAMPOS_OBRIGATORIOS",
-      });
+      res
+        .status(400)
+        .json({
+          erro: "Email e senha são obrigatórios.",
+          codigo: "CAMPOS_OBRIGATORIOS",
+        });
       return;
     }
     if (!validarEmail(email)) {
@@ -28,28 +30,34 @@ export async function login(
     const { data, error } = await AuthModel.signInSupabase(email, senha);
 
     if (error || !data.session) {
-      res.status(401).json({
-        erro: "Credenciais inválidas.",
-        codigo: "CREDENCIAIS_INVALIDAS",
-      });
+      res
+        .status(401)
+        .json({
+          erro: "Credenciais inválidas.",
+          codigo: "CREDENCIAIS_INVALIDAS",
+        });
       return;
     }
 
     const usuario = await AuthModel.buscarUsuarioPorAuthId(data.user.id);
 
     if (!usuario) {
-      res.status(401).json({
-        erro: "Usuário não encontrado.",
-        codigo: "USUARIO_NAO_ENCONTRADO",
-      });
+      res
+        .status(401)
+        .json({
+          erro: "Usuário não encontrado.",
+          codigo: "USUARIO_NAO_ENCONTRADO",
+        });
       return;
     }
 
     if (usuario.perfil === "aluno" && usuario.status !== "ativo") {
-      res.status(403).json({
-        erro: "Cadastro pendente de aprovação.",
-        codigo: "CADASTRO_INATIVO",
-      });
+      res
+        .status(403)
+        .json({
+          erro: "Cadastro pendente de aprovação.",
+          codigo: "CADASTRO_INATIVO",
+        });
       return;
     }
 
@@ -78,20 +86,24 @@ export async function refreshToken(
     const { refresh_token } = req.body;
 
     if (!refresh_token || typeof refresh_token !== "string") {
-      res.status(400).json({
-        erro: "refresh_token obrigatório.",
-        codigo: "CAMPOS_OBRIGATORIOS",
-      });
+      res
+        .status(400)
+        .json({
+          erro: "refresh_token obrigatório.",
+          codigo: "CAMPOS_OBRIGATORIOS",
+        });
       return;
     }
 
     const { data, error } = await AuthModel.refreshSession(refresh_token);
 
     if (error || !data.session) {
-      res.status(401).json({
-        erro: "Refresh token inválido ou expirado.",
-        codigo: "REFRESH_INVALIDO",
-      });
+      res
+        .status(401)
+        .json({
+          erro: "Refresh token inválido ou expirado.",
+          codigo: "REFRESH_INVALIDO",
+        });
       return;
     }
 
@@ -124,7 +136,44 @@ export async function logout(
   }
 }
 
+// POST /auth/mfa/enviar
+// Usuário já logado solicita o código OTP — chama antes de ação sensível
+export async function enviarMfa(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const email = await AuthModel.buscarEmailPorAuthId(req.user!.id);
+    if (!email) {
+      res
+        .status(404)
+        .json({
+          erro: "Usuário não encontrado.",
+          codigo: "USUARIO_NAO_ENCONTRADO",
+        });
+      return;
+    }
+
+    const { error } = await AuthModel.enviarOtpEmail(email);
+    if (error) {
+      res
+        .status(400)
+        .json({
+          erro: "Não foi possível enviar o código.",
+          codigo: "OTP_ENVIO_FALHOU",
+        });
+      return;
+    }
+
+    res.json({ mensagem: "Código enviado para o seu e-mail." });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /auth/mfa/verificar
+// Usuário envia o código de 6 dígitos recebido no email
 export async function verificarMfa(
   req: Request,
   res: Response,
@@ -132,15 +181,45 @@ export async function verificarMfa(
 ): Promise<void> {
   try {
     const { codigo } = req.body;
-    if (!codigo || typeof codigo !== "string" || !/^\d{4}$/.test(codigo)) {
-      res.status(400).json({
-        erro: "Código inválido. Deve ter exatamente 4 dígitos.",
-        codigo: "CODIGO_INVALIDO",
-      });
+
+    if (!codigo || typeof codigo !== "string" || !/^\d{6}$/.test(codigo)) {
+      res
+        .status(400)
+        .json({
+          erro: "Código inválido. Deve ter exatamente 6 dígitos.",
+          codigo: "CODIGO_INVALIDO",
+        });
       return;
     }
 
-    res.json({ verificado: true });
+    const email = await AuthModel.buscarEmailPorAuthId(req.user!.id);
+    if (!email) {
+      res
+        .status(404)
+        .json({
+          erro: "Usuário não encontrado.",
+          codigo: "USUARIO_NAO_ENCONTRADO",
+        });
+      return;
+    }
+
+    const { data, error } = await AuthModel.verificarOtpEmail(email, codigo);
+    if (error || !data.session) {
+      res
+        .status(401)
+        .json({
+          erro: "Código inválido ou expirado.",
+          codigo: "CODIGO_INVALIDO",
+        });
+      return;
+    }
+
+    // Devolve novos tokens — o access_token agora tem MFA verificado
+    res.json({
+      mensagem: "MFA verificado com sucesso.",
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
+    });
   } catch (err) {
     next(err);
   }
@@ -178,20 +257,24 @@ export async function alterarSenha(
     const { senha_atual, nova_senha } = req.body;
 
     if (!senha_atual || !nova_senha) {
-      res.status(400).json({
-        erro: "senha_atual e nova_senha são obrigatórias.",
-        codigo: "CAMPOS_OBRIGATORIOS",
-      });
+      res
+        .status(400)
+        .json({
+          erro: "senha_atual e nova_senha são obrigatórias.",
+          codigo: "CAMPOS_OBRIGATORIOS",
+        });
       return;
     }
 
     // Confirma a senha atual tentando um signIn com o email do próprio usuário
     const email = await AuthModel.buscarEmailPorAuthId(req.user!.id);
     if (!email) {
-      res.status(404).json({
-        erro: "Usuário não encontrado.",
-        codigo: "USUARIO_NAO_ENCONTRADO",
-      });
+      res
+        .status(404)
+        .json({
+          erro: "Usuário não encontrado.",
+          codigo: "USUARIO_NAO_ENCONTRADO",
+        });
       return;
     }
 
@@ -200,10 +283,12 @@ export async function alterarSenha(
       senha_atual,
     );
     if (erroLogin) {
-      res.status(401).json({
-        erro: "Senha atual incorreta.",
-        codigo: "SENHA_ATUAL_INVALIDA",
-      });
+      res
+        .status(401)
+        .json({
+          erro: "Senha atual incorreta.",
+          codigo: "SENHA_ATUAL_INVALIDA",
+        });
       return;
     }
 
@@ -216,10 +301,12 @@ export async function alterarSenha(
     }
 
     if (senha_atual === nova_senha) {
-      res.status(422).json({
-        erro: "A nova senha deve ser diferente da atual.",
-        codigo: "SENHA_IGUAL",
-      });
+      res
+        .status(422)
+        .json({
+          erro: "A nova senha deve ser diferente da atual.",
+          codigo: "SENHA_IGUAL",
+        });
       return;
     }
 
@@ -228,10 +315,12 @@ export async function alterarSenha(
       nova_senha,
     );
     if (error) {
-      res.status(400).json({
-        erro: "Não foi possível alterar a senha.",
-        codigo: "ALTERACAO_FALHOU",
-      });
+      res
+        .status(400)
+        .json({
+          erro: "Não foi possível alterar a senha.",
+          codigo: "ALTERACAO_FALHOU",
+        });
       return;
     }
 
@@ -251,28 +340,34 @@ export async function alterarEmail(
     const { senha_atual, novo_email } = req.body;
 
     if (!senha_atual || !novo_email) {
-      res.status(400).json({
-        erro: "senha_atual e novo_email são obrigatórios.",
-        codigo: "CAMPOS_OBRIGATORIOS",
-      });
+      res
+        .status(400)
+        .json({
+          erro: "senha_atual e novo_email são obrigatórios.",
+          codigo: "CAMPOS_OBRIGATORIOS",
+        });
       return;
     }
 
     if (!validarEmail(novo_email)) {
-      res.status(400).json({
-        erro: "novo_email válido obrigatório.",
-        codigo: "EMAIL_INVALIDO",
-      });
+      res
+        .status(400)
+        .json({
+          erro: "novo_email válido obrigatório.",
+          codigo: "EMAIL_INVALIDO",
+        });
       return;
     }
 
     // Confirma a senha atual antes de qualquer alteração
     const emailAtual = await AuthModel.buscarEmailPorAuthId(req.user!.id);
     if (!emailAtual) {
-      res.status(404).json({
-        erro: "Usuário não encontrado.",
-        codigo: "USUARIO_NAO_ENCONTRADO",
-      });
+      res
+        .status(404)
+        .json({
+          erro: "Usuário não encontrado.",
+          codigo: "USUARIO_NAO_ENCONTRADO",
+        });
       return;
     }
 
@@ -281,18 +376,22 @@ export async function alterarEmail(
       senha_atual,
     );
     if (erroLogin) {
-      res.status(401).json({
-        erro: "Senha atual incorreta.",
-        codigo: "SENHA_ATUAL_INVALIDA",
-      });
+      res
+        .status(401)
+        .json({
+          erro: "Senha atual incorreta.",
+          codigo: "SENHA_ATUAL_INVALIDA",
+        });
       return;
     }
 
     if (novo_email === emailAtual) {
-      res.status(422).json({
-        erro: "O novo e-mail deve ser diferente do atual.",
-        codigo: "EMAIL_IGUAL",
-      });
+      res
+        .status(422)
+        .json({
+          erro: "O novo e-mail deve ser diferente do atual.",
+          codigo: "EMAIL_IGUAL",
+        });
       return;
     }
 
@@ -309,10 +408,12 @@ export async function alterarEmail(
       novo_email,
     );
     if (error) {
-      res.status(400).json({
-        erro: "Não foi possível alterar o e-mail.",
-        codigo: "ALTERACAO_FALHOU",
-      });
+      res
+        .status(400)
+        .json({
+          erro: "Não foi possível alterar o e-mail.",
+          codigo: "ALTERACAO_FALHOU",
+        });
       return;
     }
 

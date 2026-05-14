@@ -58,6 +58,23 @@ export async function atualizarEmailUsuario(novoEmail: string, authId: string) {
   ]);
 }
 
+// Dispara o email com o código OTP de 6 dígitos
+export async function enviarOtpEmail(email: string) {
+  return supabaseAnon.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: false }, // não cria usuário novo se não existir
+  });
+}
+
+// Verifica o código OTP digitado pelo usuário
+export async function verificarOtpEmail(email: string, token: string) {
+  return supabaseAnon.auth.verifyOtp({
+    email,
+    token,
+    type: "email",
+  });
+}
+
 export async function refreshSession(refreshToken: string) {
   return supabaseAnon.auth.refreshSession({ refresh_token: refreshToken });
 }
