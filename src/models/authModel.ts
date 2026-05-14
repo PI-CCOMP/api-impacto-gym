@@ -49,3 +49,12 @@ export async function atualizarEmailUsuario(novoEmail: string, authId: string) {
     authId,
   ]);
 }
+
+export async function refreshSession(refreshToken: string) {
+  return supabaseAnon.auth.refreshSession({ refresh_token: refreshToken });
+}
+
+// Revoga todos os tokens ativos do usuário (logout global)
+export async function signOut(authId: string) {
+  return supabaseAdmin.auth.admin.signOut(authId, 'global');
+}
