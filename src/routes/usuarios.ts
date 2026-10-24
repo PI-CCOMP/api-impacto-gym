@@ -41,7 +41,7 @@ router.get(
 router.put(
   "/:id",
   authMiddleware,
-  authorize("admin", "instrutor", "recepcionista"),
+  authorize("admin"),
   editarUsuario,
 );
 

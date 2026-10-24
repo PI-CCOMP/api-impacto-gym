@@ -93,7 +93,7 @@ export async function listar(filtros: {
 }) {
   return pool.query(
     `SELECT
-      u.id AS id_aluno, u.nome, u.cpf, u.email_verificado,
+      u.id AS id_aluno, u.nome, u.cpf, u.email, u.email_verificado,
       a.deficiencia, a.restricao_medica, a.prazo_envio_laudo,
       d.id AS id_documento, d.caminho_arquivo, d.nome_arquivo,
       d.status AS status_documento, d.motivo_rejeicao,

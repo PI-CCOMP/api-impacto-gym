@@ -6,12 +6,14 @@ import { gerarCodigoEmail, hashCodigoEmail } from "../utils/emailCode";
 export async function enviarCodigoVerificacaoCadastro(
   idUsuario: number,
   email: string,
-): Promise<void> {
+): Promise<boolean> {
   const codigo = gerarCodigoEmail();
-  await AuthModel.salvarCodigoEmail(
+  const salvo = await AuthModel.salvarCodigoEmail(
     idUsuario,
     "verificacao_cadastro",
     hashCodigoEmail(codigo),
   );
+  if (!salvo) return false;
   await enviarEmail(email, cadastroEmail(codigo));
+  return true;
 }

@@ -53,48 +53,50 @@ export async function buscarSeriesDaSessao(idSessao: number) {
   );
 }
 
-export async function verificarSessaoDoAluno(
-  idSessao: number,
-  idUsuario: number,
-) {
-  return pool.query(
-    `SELECT 1 FROM sessoes_treino WHERE id = $1 AND id_aluno = $2 AND status = 'em_andamento'`,
-    [idSessao, idUsuario],
-  );
-}
-
 export async function registrarSerie(dados: {
   idSessao: number;
+  idUsuario: number;
   idAluno_treinoExercicio: number;
   numeroSerie: number;
   cargaReal: number;
 }) {
-  return pool.query(
-    `INSERT INTO sessao_series (id_sessao, id_aluno_treino_exercicio, numero_serie, carga_real)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (id_sessao, id_aluno_treino_exercicio, numero_serie)
-     DO UPDATE SET carga_real = EXCLUDED.carga_real`,
+  const { rows } = await pool.query(
+    `WITH exercicio_valido AS (
+       SELECT ate.id, ate.numero_serie
+       FROM sessoes_treino s
+       JOIN aluno_treinos at
+         ON at.id = s.id_aluno_treino AND at.id_aluno = s.id_aluno
+       JOIN aluno_treino_exercicios ate ON ate.id_aluno_treino = at.id
+       WHERE s.id = $1 AND s.id_aluno = $2 AND s.status = 'em_andamento'
+         AND ate.id = $3 AND ate.numero_serie = $4
+     ), serie_salva AS (
+       INSERT INTO sessao_series (id_sessao, id_aluno_treino_exercicio, numero_serie, carga_real)
+       SELECT $1, ev.id, ev.numero_serie, $5 FROM exercicio_valido ev
+       ON CONFLICT (id_sessao, id_aluno_treino_exercicio, numero_serie)
+       DO UPDATE SET carga_real = EXCLUDED.carga_real
+       RETURNING id_aluno_treino_exercicio
+     )
+     UPDATE aluno_treino_exercicios ate SET carga_real = $5
+     FROM serie_salva ss
+     WHERE ate.id = ss.id_aluno_treino_exercicio
+     RETURNING ate.id`,
     [
       dados.idSessao,
+      dados.idUsuario,
       dados.idAluno_treinoExercicio,
       dados.numeroSerie,
       dados.cargaReal,
     ],
   );
+  return rows[0] ?? null;
 }
 
-export async function atualizarCargaReal(
-  cargaReal: number,
-  idAluno_treinoExercicio: number,
+export async function finalizar(
+  client: any,
+  idSessao: string,
+  idUsuario: number,
 ) {
-  return pool.query(
-    `UPDATE aluno_treino_exercicios SET carga_real = $1 WHERE id = $2`,
-    [cargaReal, idAluno_treinoExercicio],
-  );
-}
-
-export async function finalizar(idSessao: string, idUsuario: number) {
-  return pool.query(
+  return client.query(
     `UPDATE sessoes_treino SET status = 'finalizado', finalizado_em = NOW()
      WHERE id = $1 AND id_aluno = $2 AND status = 'em_andamento'
      RETURNING id, id_aluno_treino`,

@@ -83,7 +83,15 @@ export async function login(
 
     if (usuario.perfil === "admin" || usuario.perfil === "recepcionista") {
       const codigo = String(randomInt(0, 1_000_000)).padStart(6, "0");
-      await AuthModel.salvarCodigoEmail(usuario.id, "login_admin", hash(codigo));
+      const salvo = await AuthModel.salvarCodigoEmail(
+        usuario.id,
+        "login_admin",
+        hash(codigo),
+      );
+      if (!salvo) {
+        erroResposta(res, 429, "Aguarde antes de solicitar outro código.", "EMAIL_COOLDOWN");
+        return;
+      }
       await enviarEmail(usuario.email, loginAdminEmail(codigo));
       res.json({
         email_verification_required: true,
@@ -308,8 +316,12 @@ export async function esqueciSenha(
     const usuario = await AuthModel.buscarUsuarioPorEmail(email);
     if (usuario) {
       const codigo = String(randomInt(0, 1_000_000)).padStart(6, "0");
-      await AuthModel.salvarCodigoEmail(usuario.id, "recuperacao_senha", hash(codigo));
-      await enviarEmail(email, recuperacaoSenhaEmail(codigo));
+      const salvo = await AuthModel.salvarCodigoEmail(
+        usuario.id,
+        "recuperacao_senha",
+        hash(codigo),
+      );
+      if (salvo) await enviarEmail(email, recuperacaoSenhaEmail(codigo));
     }
     res.json({ mensagem: "Se o e-mail estiver cadastrado, enviaremos um código de recuperação." });
   } catch (err) {

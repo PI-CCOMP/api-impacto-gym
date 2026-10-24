@@ -449,6 +449,23 @@ export async function desvincularAluno(
 ): Promise<void> {
   try {
     const { id_treino, id_aluno } = req.params;
+    if (req.user!.perfil === "instrutor") {
+      const donoTreino = await TreinoModel.verificarDonoTreino(
+        id_treino,
+        req.user!.id_usuario,
+      );
+      const alunoDoInstrutor = await TreinoModel.verificarAlunoDoInstrutor(
+        Number(id_aluno),
+        req.user!.id_usuario,
+      );
+      if (donoTreino.rows.length === 0 || alunoDoInstrutor.rows.length === 0) {
+        res.status(403).json({
+          erro: "Instrutor só pode desvincular os próprios treinos dos próprios alunos.",
+          codigo: "SEM_PERMISSAO",
+        });
+        return;
+      }
+    }
     const { rows } = await TreinoModel.desvincularAlunoDeTreino(
       id_treino,
       id_aluno,

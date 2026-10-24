@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { PoolClient } from "pg";
 import pool from "../config/database";
 import * as SessaoModel from "../models/sessaoModel";
 
@@ -102,44 +103,39 @@ export async function registrarSerie(
     const { id_aluno_treino_exercicio, numero_serie, carga_real } = req.body;
 
     if (
-      !id_aluno_treino_exercicio ||
-      numero_serie === undefined ||
-      carga_real === undefined
+      !Number.isSafeInteger(idSessao) ||
+      idSessao <= 0 ||
+      !Number.isSafeInteger(id_aluno_treino_exercicio) ||
+      id_aluno_treino_exercicio <= 0 ||
+      !Number.isSafeInteger(numero_serie) ||
+      numero_serie <= 0 ||
+      typeof carga_real !== "number" ||
+      !Number.isFinite(carga_real) ||
+      carga_real < 0 ||
+      carga_real > 9999.99
     ) {
-      res
-        .status(400)
-        .json({
-          erro: "Campos obrigatórios ausentes.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+      res.status(422).json({
+        erro: "Sessão, exercício, série ou carga inválida.",
+        codigo: "DADOS_INVALIDOS",
+      });
       return;
     }
 
     const id_usuario = req.user!.id_usuario;
-
-    const { rows: sRows } = await SessaoModel.verificarSessaoDoAluno(
+    const serie = await SessaoModel.registrarSerie({
       idSessao,
-      id_usuario!,
-    );
-    if (sRows.length === 0) {
-      res
-        .status(404)
-        .json({
-          erro: "Sessão ativa não encontrada.",
-          codigo: "NAO_ENCONTRADO",
-        });
-      return;
-    }
-
-    await SessaoModel.registrarSerie({
-      idSessao,
+      idUsuario: id_usuario,
       idAluno_treinoExercicio: id_aluno_treino_exercicio,
       numeroSerie: numero_serie,
       cargaReal: carga_real,
     });
-
-    // RN20: salva carga_real como referência para próximos treinos
-    await SessaoModel.atualizarCargaReal(carga_real, id_aluno_treino_exercicio);
+    if (!serie) {
+      res.status(404).json({
+        erro: "Sessão, exercício ou série não pertencem ao aluno.",
+        codigo: "NAO_ENCONTRADO",
+      });
+      return;
+    }
 
     res.json({ registrado: true });
   } catch (err) {
@@ -153,15 +149,22 @@ export async function finalizarSessao(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const client = await pool.connect();
+  let client: PoolClient | null = null;
   try {
+    client = await pool.connect();
+    await client.query("BEGIN");
     const { id_sessao } = req.params;
     const { duracao_segundos, volume_total } = req.body;
 
     const id_usuario = req.user!.id_usuario;
 
-    const { rows } = await SessaoModel.finalizar(id_sessao, id_usuario!);
+    const { rows } = await SessaoModel.finalizar(
+      client,
+      id_sessao,
+      id_usuario,
+    );
     if (rows.length === 0) {
+      await client.query("ROLLBACK");
       res
         .status(404)
         .json({
@@ -171,11 +174,9 @@ export async function finalizarSessao(
       return;
     }
 
-    await client.query("BEGIN");
-
     // RN23: registra histórico
     const { rows: histRows } = await SessaoModel.inserirHistorico(client, {
-      idUsuario: id_usuario!,
+      idUsuario: id_usuario,
       idAluno_treino: rows[0].id_aluno_treino,
       duracaoSegundos: duracao_segundos ?? 0,
       volumeTotal: volume_total ?? 0,
@@ -184,10 +185,10 @@ export async function finalizarSessao(
     await client.query("COMMIT");
     res.json({ id_historico: histRows[0].id, status: "finalizado" });
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (client) await client.query("ROLLBACK").catch(() => undefined);
     next(err);
   } finally {
-    client.release();
+    client?.release();
   }
 }
 

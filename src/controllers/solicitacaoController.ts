@@ -8,7 +8,7 @@ export async function criarSolicitacao(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { id_aluno_treino_exercicio, id_instrutor } = req.body;
+    const { id_aluno_treino_exercicio } = req.body;
     if (!id_aluno_treino_exercicio) {
       res.status(400).json({ erro: "id_aluno_treino_exercicio obrigatório.", codigo: "CAMPOS_OBRIGATORIOS" });
       return;
@@ -19,8 +19,14 @@ export async function criarSolicitacao(
     const { rows } = await SolicitacaoModel.inserir({
       idAluno: id_aluno,
       idAluno_treinoExercicio: id_aluno_treino_exercicio,
-      idInstrutor: id_instrutor ?? null,
     });
+    if (rows.length === 0) {
+      res.status(404).json({
+        erro: "Exercício não pertence a um treino ativo do aluno.",
+        codigo: "EXERCICIO_NAO_ENCONTRADO",
+      });
+      return;
+    }
     res.status(201).json({ id_solicitacao: rows[0].id, status: "aberto" });
   } catch (err) {
     next(err);

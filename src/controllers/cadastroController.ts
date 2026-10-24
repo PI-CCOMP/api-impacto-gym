@@ -153,7 +153,16 @@ export async function cadastrarAluno(
 
     await client.query("COMMIT");
     try {
-      await enviarCodigoVerificacaoCadastro(id_usuario, emailNormalizado);
+      const enviado = await enviarCodigoVerificacaoCadastro(id_usuario, emailNormalizado);
+      if (!enviado) {
+        res.status(429).json({
+          erro: "Aguarde antes de solicitar outro código para este endereço.",
+          codigo: "EMAIL_COOLDOWN",
+          id_aluno: id_usuario,
+          email_verification_required: true,
+        });
+        return;
+      }
     } catch {
       res.status(503).json({
         erro: "Cadastro criado, mas não foi possível enviar o código. Solicite novo envio.",
@@ -274,16 +283,15 @@ export async function listarCadastros(
       offset,
     });
     const total = rows.length > 0 ? Number(rows[0].total) : 0;
+    const isAdmin = req.user!.perfil === "admin";
 
     res.json({
       dados: rows.map((r) => ({
         id_aluno: r.id_aluno,
         nome: r.nome,
-        cpf: r.cpf,
         documento: r.id_documento
           ? {
               id_documento: r.id_documento,
-              caminho_arquivo: r.caminho_arquivo,
               nome_arquivo: r.nome_arquivo,
               status: r.status_documento,
               motivo_rejeicao: r.motivo_rejeicao,
@@ -295,6 +303,7 @@ export async function listarCadastros(
         restricao_medica: r.restricao_medica,
         prazo_envio_laudo: r.prazo_envio_laudo,
         prazo_laudo_expirado: new Date(r.prazo_envio_laudo).getTime() < Date.now(),
+        ...(isAdmin ? { cpf: r.cpf, email: r.email } : {}),
       })),
       total,
       pagina,

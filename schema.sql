@@ -68,6 +68,7 @@ CREATE TABLE auth_codigos_email (
   id_usuario   BIGINT      NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
   finalidade   VARCHAR(32) NOT NULL CHECK (finalidade IN ('login_admin', 'recuperacao_senha', 'verificacao_cadastro')),
   codigo_hash  CHAR(64)    NOT NULL,
+  tentativas   SMALLINT    NOT NULL DEFAULT 0 CHECK (tentativas BETWEEN 0 AND 5),
   expira_em    TIMESTAMPTZ NOT NULL,
   criado_em    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (id_usuario, finalidade)
@@ -166,6 +167,10 @@ CREATE TABLE sessoes_treino (
   iniciado_em      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
   finalizado_em    TIMESTAMPTZ
 );
+
+CREATE UNIQUE INDEX idx_sessao_unica_em_andamento
+  ON sessoes_treino (id_aluno)
+  WHERE status = 'em_andamento';
 
 --  sessao_series (estado persistido da sessão — RN20) 
 CREATE TABLE sessao_series (

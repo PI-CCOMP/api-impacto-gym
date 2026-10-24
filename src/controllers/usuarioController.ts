@@ -42,22 +42,23 @@ export async function listarUsuarios(
       perfil,
       busca,
       isInstrutor,
+      isRecepcionista: req.user!.perfil === "recepcionista",
       instrutorId: req.user!.id_usuario,
       porPagina,
       offset,
     });
 
     const total = rows.length > 0 ? Number(rows[0].total) : 0;
+    const isAdmin = req.user!.perfil === "admin";
     res.json({
       dados: rows.map((r) => ({
         id_usuario: r.id_usuario,
         nome: r.nome,
-        cpf: r.cpf,
         perfil: r.perfil,
-        email: r.email,
         status: r.status ?? null,
         deficiencia: r.deficiencia ?? null,
         restricao_medica: r.restricao_medica ?? null,
+        ...(isAdmin ? { cpf: r.cpf, email: r.email } : {}),
         instrutor_vinculado:
           r.perfil === "aluno" && r.status === "ativo"
             ? (r.instrutor_vinculado ?? null)
@@ -150,6 +151,14 @@ export async function buscarUsuario(
 
     const r = rows[0];
 
+    if (req.user!.perfil !== "admin" && r.perfil !== "aluno") {
+      res.status(403).json({
+        erro: "Somente admin pode consultar detalhes de contas de staff.",
+        codigo: "SEM_PERMISSAO",
+      });
+      return;
+    }
+
     if (
       req.user!.perfil === "instrutor" &&
       r.perfil === "aluno" &&
@@ -165,17 +174,23 @@ export async function buscarUsuario(
     const { rows: treinos } = await UsuarioModel.buscarTreinosDoAluno(
       r.id_usuario,
     );
+    const dadosPessoais =
+      req.user!.perfil === "admin"
+        ? {
+            cpf: r.cpf,
+            email: r.email,
+            sexo: r.sexo,
+            criado_em: r.criado_em,
+            email_verificado: r.email_verificado,
+          }
+        : {};
 
     res.json({
       id_usuario: r.id_usuario,
       nome: r.nome,
-      cpf: r.cpf,
-      email: r.email,
-      sexo: r.sexo,
       foto_url: r.foto_url,
       perfil: r.perfil,
-      criado_em: r.criado_em,
-      email_verificado: r.email_verificado,
+      ...dadosPessoais,
       // [CORRIGIDO] id_aluno removido — usar id_usuario como identificador único
       aluno: r.nivel
         ? {
@@ -350,7 +365,6 @@ export async function editarUsuario(
   try {
     const { id } = req.params;
     const { nome, email, sexo, perfil, foto_url, aluno } = req.body;
-    const isRecepcionista = req.user!.perfil === "recepcionista";
 
     if (req.user!.perfil === "instrutor") {
       const check = await UsuarioModel.verificarInstrutorDoAluno(
@@ -381,7 +395,6 @@ export async function editarUsuario(
       email: email?.trim().toLowerCase(),
       sexo,
       perfil,
-      isRecepcionista,
       fotoUrl: foto_url,
     });
     if (atualizados.length === 0) {
@@ -405,7 +418,7 @@ export async function editarUsuario(
       }
     }
 
-    if (aluno && !isRecepcionista) {
+    if (aluno) {
       const { rows: alunoAtualizado } = await UsuarioModel.atualizarAluno(id, {
         objetivo: aluno.objetivo,
         nivel: aluno.nivel,
@@ -509,20 +522,7 @@ export async function atualizarInstrutorDoAluno(
     const isAdmin = req.user!.perfil === "admin";
     const isInstrutor = req.user!.perfil === "instrutor";
 
-    let id_instrutor: number | null;
-
-    if (isInstrutor) {
-      id_instrutor = req.user!.id_usuario;
-    } else if (isAdmin) {
-      if (!("id_instrutor" in req.body)) {
-        res.status(400).json({
-          erro: "id_instrutor é obrigatório no body.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
-        return;
-      }
-      id_instrutor = req.body.id_instrutor ?? null;
-    } else {
+    if (!isAdmin && !isInstrutor) {
       res
         .status(403)
         .json({ erro: "Acesso não autorizado.", codigo: "SEM_PERMISSAO" });
@@ -537,6 +537,44 @@ export async function atualizarInstrutorDoAluno(
       return;
     }
 
+    const { rows: instAtualRows } =
+      await UsuarioModel.buscarInstrutorDoAluno(id);
+    const instrutorAtual = instAtualRows[0]?.id_instrutor ?? null;
+    let id_instrutor: number | null;
+
+    if (isInstrutor) {
+      if (instrutorAtual === null) {
+        id_instrutor = req.user!.id_usuario;
+      } else if (instrutorAtual === req.user!.id_usuario) {
+        id_instrutor = req.body.id_instrutor === null ? null : instrutorAtual;
+      } else {
+        res.status(403).json({
+          erro: "Só o admin pode reassociar aluno de outro instrutor.",
+          codigo: "SEM_PERMISSAO",
+        });
+        return;
+      }
+    } else {
+      if (!("id_instrutor" in req.body)) {
+        res.status(400).json({
+          erro: "id_instrutor é obrigatório no body.",
+          codigo: "CAMPOS_OBRIGATORIOS",
+        });
+        return;
+      }
+      id_instrutor = req.body.id_instrutor ?? null;
+      if (
+        id_instrutor !== null &&
+        (!Number.isSafeInteger(id_instrutor) || id_instrutor <= 0)
+      ) {
+        res.status(422).json({
+          erro: "id_instrutor inválido.",
+          codigo: "ID_INSTRUTOR_INVALIDO",
+        });
+        return;
+      }
+    }
+
     if (id_instrutor !== null) {
       const { rows: perfilRows } =
         await UsuarioModel.validarPerfilInstrutor(id_instrutor);
@@ -549,11 +587,7 @@ export async function atualizarInstrutorDoAluno(
       }
     }
 
-    const { rows: instAtualRows } =
-      await UsuarioModel.buscarInstrutorDoAluno(id);
-    const instrutorAtual = instAtualRows[0]?.id_instrutor ?? null;
-    const estaTrocando =
-      instrutorAtual !== null && instrutorAtual !== id_instrutor;
+    const estaTrocando = instrutorAtual !== id_instrutor;
 
     await client.query("BEGIN");
 
@@ -565,12 +599,15 @@ export async function atualizarInstrutorDoAluno(
       client,
       id,
       id_instrutor,
+      isInstrutor,
+      req.user!.id_usuario,
     );
     if (rows.length === 0) {
       await client.query("ROLLBACK");
-      res
-        .status(404)
-        .json({ erro: "Aluno não encontrado.", codigo: "NAO_ENCONTRADO" });
+      res.status(409).json({
+        erro: "O vínculo mudou durante a operação; atualize os dados e tente novamente.",
+        codigo: "VINCULO_ALTERADO",
+      });
       return;
     }
 
@@ -597,6 +634,19 @@ export async function desvincularTreino(
 ): Promise<void> {
   try {
     const { id, id_aluno_treino } = req.params;
+    if (req.user!.perfil === "instrutor") {
+      const alunoDoInstrutor = await UsuarioModel.verificarInstrutorDoAluno(
+        id,
+        req.user!.id_usuario,
+      );
+      if (alunoDoInstrutor.rows.length === 0) {
+        res.status(403).json({
+          erro: "Instrutor só pode remover treinos dos próprios alunos.",
+          codigo: "SEM_PERMISSAO",
+        });
+        return;
+      }
+    }
     const { rows } = await UsuarioModel.desvincularTreino(id, id_aluno_treino);
     if (rows.length === 0) {
       res

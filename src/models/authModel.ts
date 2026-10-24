@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import pool from "../config/database";
 
 export async function buscarUsuarioPorEmail(email: string) {
@@ -140,13 +141,18 @@ export async function salvarCodigoEmail(
   finalidade: "login_admin" | "recuperacao_senha" | "verificacao_cadastro",
   codigoHash: string,
 ) {
-  return pool.query(
-    `INSERT INTO auth_codigos_email (id_usuario, finalidade, codigo_hash, expira_em)
-     VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes')
+  const { rows } = await pool.query<{ id_usuario: number }>(
+    `INSERT INTO auth_codigos_email
+       (id_usuario, finalidade, codigo_hash, expira_em, tentativas)
+     VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes', 0)
      ON CONFLICT (id_usuario, finalidade)
-     DO UPDATE SET codigo_hash = EXCLUDED.codigo_hash, expira_em = EXCLUDED.expira_em`,
+     DO UPDATE SET codigo_hash = EXCLUDED.codigo_hash,
+       expira_em = EXCLUDED.expira_em, criado_em = NOW(), tentativas = 0
+     WHERE auth_codigos_email.criado_em <= NOW() - INTERVAL '60 seconds'
+     RETURNING id_usuario`,
     [idUsuario, finalidade, codigoHash],
   );
+  return rows.length > 0;
 }
 
 export async function consumirCodigoEmail(
@@ -154,14 +160,51 @@ export async function consumirCodigoEmail(
   finalidade: "login_admin" | "recuperacao_senha" | "verificacao_cadastro",
   codigoHash: string,
 ) {
-  const { rows } = await pool.query<{ id_usuario: number }>(
-    `DELETE FROM auth_codigos_email
-     WHERE id_usuario = $1 AND finalidade = $2 AND codigo_hash = $3
-       AND expira_em > NOW()
-     RETURNING id_usuario`,
-    [idUsuario, finalidade, codigoHash],
-  );
-  return rows[0] ?? null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<{
+      codigo_hash: string;
+      tentativas: number;
+    }>(
+      `SELECT codigo_hash, tentativas FROM auth_codigos_email
+       WHERE id_usuario = $1 AND finalidade = $2 AND expira_em > NOW()
+       FOR UPDATE`,
+      [idUsuario, finalidade],
+    );
+    const codigoSalvo = rows[0];
+    if (!codigoSalvo || codigoSalvo.tentativas >= 5) {
+      await client.query("COMMIT");
+      return null;
+    }
+
+    const esperado = Buffer.from(codigoSalvo.codigo_hash, "hex");
+    const recebido = Buffer.from(codigoHash, "hex");
+    const valido =
+      esperado.length === recebido.length && timingSafeEqual(esperado, recebido);
+
+    if (valido) {
+      await client.query(
+        "DELETE FROM auth_codigos_email WHERE id_usuario = $1 AND finalidade = $2",
+        [idUsuario, finalidade],
+      );
+      await client.query("COMMIT");
+      return { id_usuario: idUsuario };
+    }
+
+    await client.query(
+      `UPDATE auth_codigos_email SET tentativas = tentativas + 1
+       WHERE id_usuario = $1 AND finalidade = $2`,
+      [idUsuario, finalidade],
+    );
+    await client.query("COMMIT");
+    return null;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function atualizarSenha(idUsuario: number, senhaHash: string) {
@@ -173,7 +216,17 @@ export async function atualizarSenha(idUsuario: number, senhaHash: string) {
 
 export async function atualizarEmail(idUsuario: number, novoEmail: string) {
   return pool.query(
-    `UPDATE usuarios SET email = $1, email_verificado = false WHERE id = $2`,
+    `WITH usuario_atualizado AS (
+       UPDATE usuarios SET email = $1, email_verificado = false
+       WHERE id = $2
+       RETURNING id, email
+     ), codigos_removidos AS (
+       DELETE FROM auth_codigos_email c
+       USING usuario_atualizado u
+       WHERE c.id_usuario = u.id
+       RETURNING c.id_usuario
+     )
+     SELECT id, email FROM usuario_atualizado`,
     [novoEmail, idUsuario],
   );
 }

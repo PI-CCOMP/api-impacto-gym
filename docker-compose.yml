@@ -15,6 +15,8 @@ services:
       - ./migrations/001_email_verification.sql:/docker-entrypoint-initdb.d/002-email-verification.sql:ro
       - ./migrations/002_sexo_prazo_laudo.sql:/docker-entrypoint-initdb.d/003-sexo-prazo-laudo.sql:ro
       - ./migrations/003_document_unique.sql:/docker-entrypoint-initdb.d/004-document-unique.sql:ro
+      - ./migrations/004_unique_active_session.sql:/docker-entrypoint-initdb.d/005-unique-active-session.sql:ro
+      - ./migrations/005_email_code_attempts.sql:/docker-entrypoint-initdb.d/006-email-code-attempts.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U impacto_gym -d impacto_gym"]
       interval: 5s

@@ -7,13 +7,16 @@ export async function buscarIdPorUsuarioId(idUsuario: number) {
 export async function inserir(dados: {
   idAluno: number;
   idAluno_treinoExercicio: number;
-  idInstrutor: number | null;
 }) {
   return pool.query(
     `INSERT INTO solicitacoes_auxilio (id_aluno, id_aluno_treino_exercicio, id_instrutor, status)
-     VALUES ($1, $2, $3, 'aberto')
+     SELECT a.id_usuario, ate.id, a.id_instrutor, 'aberto'
+     FROM alunos a
+     JOIN aluno_treinos at ON at.id_aluno = a.id_usuario AND at.ativo = true
+     JOIN aluno_treino_exercicios ate ON ate.id_aluno_treino = at.id
+     WHERE a.id_usuario = $1 AND ate.id = $2
      RETURNING id`,
-    [dados.idAluno, dados.idAluno_treinoExercicio, dados.idInstrutor],
+    [dados.idAluno, dados.idAluno_treinoExercicio],
   );
 }
 

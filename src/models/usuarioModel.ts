@@ -4,6 +4,7 @@ export async function listar(filtros: {
   perfil: string;
   busca: string;
   isInstrutor: boolean;
+  isRecepcionista: boolean;
   instrutorId: number;
   porPagina: number;
   offset: number;
@@ -20,6 +21,7 @@ export async function listar(filtros: {
      WHERE ($1 = '' OR u.perfil = $1::perfil_usuario)
        AND ($2 = '' OR u.nome ILIKE '%' || $2 || '%' OR u.cpf ILIKE '%' || $2 || '%')
       AND ($3 = false OR a.id_instrutor = $4 OR (a.id_instrutor IS NULL AND u.perfil = 'aluno'))
+      AND ($7 = false OR u.perfil = 'aluno')
      ORDER BY u.nome ASC
      LIMIT $5 OFFSET $6`,
     [
@@ -29,6 +31,7 @@ export async function listar(filtros: {
       filtros.instrutorId,
       filtros.porPagina,
       filtros.offset,
+      filtros.isRecepcionista,
     ],
   );
 }
@@ -142,11 +145,9 @@ export async function atualizar(
     email?: string;
     sexo?: string;
     perfil?: string;
-    isRecepcionista: boolean;
     fotoUrl?: string;
   },
 ) {
-  // [CORRIGIDO] cast $5::boolean evita erro "could not determine data type of parameter $4"
   return pool.query(
     `UPDATE usuarios SET
        nome = COALESCE($1, nome),
@@ -156,16 +157,15 @@ export async function atualizar(
          ELSE email_verificado
        END,
        sexo = COALESCE($3::sexo_usuario, sexo),
-       perfil = CASE WHEN $4 IS NOT NULL AND $5::boolean = false THEN $4::perfil_usuario ELSE perfil END,
-       foto_url = COALESCE($6, foto_url)
-    WHERE id = $7
+      perfil = COALESCE($4::perfil_usuario, perfil),
+      foto_url = COALESCE($5, foto_url)
+    WHERE id = $6
     RETURNING id, email, email_verificado`,
     [
       dados.nome ?? null,
       dados.email ?? null,
       dados.sexo ?? null,
       dados.perfil ?? null,
-      dados.isRecepcionista,
       dados.fotoUrl ?? null,
       id,
     ],
@@ -257,10 +257,15 @@ export async function atualizarInstrutorDoAluno(
   client: any,
   idUsuario: string,
   idInstrutor: number | null,
+  somenteProprioOuSemVinculo: boolean,
+  instrutorAtualId: number,
 ) {
   return client.query(
-    `UPDATE alunos SET id_instrutor = $1 WHERE id_usuario = $2 RETURNING id_usuario`,
-    [idInstrutor, idUsuario],
+    `UPDATE alunos SET id_instrutor = $1
+     WHERE id_usuario = $2
+       AND ($3::boolean = false OR id_instrutor IS NULL OR id_instrutor = $4)
+     RETURNING id_usuario`,
+    [idInstrutor, idUsuario, somenteProprioOuSemVinculo, instrutorAtualId],
   );
 }
 

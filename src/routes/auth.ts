@@ -44,8 +44,8 @@ router.post("/email/reenviar-verificacao", emailCodeLimiter, reenviarVerificacao
 router.post("/email/solicitar-upload-laudo", emailCodeLimiter, solicitarTokenUploadLaudo);
 router.post("/refresh", refreshToken);
 router.post("/logout", authMiddleware, logout);
-router.post("/esqueci-senha", esqueciSenha);
-router.post("/redefinir-senha", redefinirSenha);
+router.post("/esqueci-senha", emailCodeLimiter, esqueciSenha);
+router.post("/redefinir-senha", emailCodeLimiter, redefinirSenha);
 router.patch("/alterar-senha", authMiddleware, alterarSenha);
 router.patch("/alterar-email", authMiddleware, alterarEmail);
 
