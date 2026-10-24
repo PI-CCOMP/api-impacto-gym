@@ -1,11 +1,10 @@
 import { Request, Response, NextFunction } from "express";
-import { supabaseAdmin } from "../config/supabase";
 import { UsuarioToken, Perfil } from "../types";
 import pool from "../config/database";
+import { verificarAccessToken } from "../config/tokens";
 
 /**
- * Verifica o JWT emitido pelo Supabase Auth.
- * Popula req.user com { id, perfil, mfa_verificado }.
+ * Verifica localmente o JWT e confirma que a sessão segue ativa no PostgreSQL.
  */
 export async function authMiddleware(
   req: Request,
@@ -22,35 +21,43 @@ export async function authMiddleware(
 
   const token = header.slice(7);
 
-  // Valida o token com o Supabase — não verifica localmente para evitar
-  // tokens revogados circulando.
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
-
-  if (error || !data.user) {
+  let claims;
+  try {
+    claims = verificarAccessToken(token);
+  } catch {
     res
       .status(401)
       .json({ erro: "Token inválido ou expirado.", codigo: "TOKEN_INVALIDO" });
     return;
   }
 
-  // Busca o perfil do usuário na nossa tabela (Supabase Auth não armazena perfil)
   try {
     const { rows } = await pool.query<{
       id: number;
       perfil: Perfil;
+      email_verificado: boolean;
       status: string | null;
     }>(
-      `SELECT u.id, u.perfil, a.status
+      `SELECT u.id, u.perfil, u.email_verificado, a.status
        FROM usuarios u
        LEFT JOIN alunos a ON a.id_usuario = u.id
-       WHERE u.id_auth = $1`,
-      [data.user.id],
+      JOIN auth_sessoes s ON s.id = $2 AND s.id_usuario = u.id
+      WHERE u.id = $1 AND s.expira_em > NOW()`,
+      [claims.id_usuario, claims.sid],
     );
 
     if (rows.length === 0) {
       res.status(401).json({
         erro: "Usuário não encontrado.",
         codigo: "USUARIO_NAO_ENCONTRADO",
+      });
+      return;
+    }
+
+    if (!rows[0].email_verificado) {
+      res.status(403).json({
+        erro: "Confirme seu e-mail antes de acessar o sistema.",
+        codigo: "EMAIL_NAO_VERIFICADO",
       });
       return;
     }
@@ -64,15 +71,11 @@ export async function authMiddleware(
       return;
     }
 
-    const mfa_verificado = (data.user.factors ?? []).some(
-      (f: any) => f.status === "verified",
-    );
-
     req.user = {
-      id: data.user.id,
+      id: String(rows[0].id),
       id_usuario: rows[0].id,
       perfil: rows[0].perfil,
-      mfa_verificado,
+      session_id: claims.sid,
     } satisfies UsuarioToken;
 
     next();
@@ -98,22 +101,4 @@ export function authorize(...perfis: Perfil[]) {
     }
     next();
   };
-}
-
-/**
- * Exige que o usuário tenha passado pelo MFA antes de ações sensíveis
- * (alterar senha, alterar e-mail).
- */
-export function requireMfa(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
-  if (!req.user?.mfa_verificado) {
-    res
-      .status(403)
-      .json({ erro: "Verificação MFA necessária.", codigo: "MFA_REQUERIDO" });
-    return;
-  }
-  next();
 }

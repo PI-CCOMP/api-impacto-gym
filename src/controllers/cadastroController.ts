@@ -1,7 +1,12 @@
 import { Request, Response, NextFunction } from "express";
+import bcrypt from "bcryptjs";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import pool from "../config/database";
-import { supabaseAdmin } from "../config/supabase";
 import * as CadastroModel from "../models/cadastroModel";
+import { enviarEmail } from "../services/email";
+import { laudoRejeitadoEmail } from "../services/emailTemplates";
+import { enviarCodigoVerificacaoCadastro } from "../services/emailVerification";
 import {
   validarSenha,
   validarEmail,
@@ -57,6 +62,7 @@ export async function cadastrarAluno(
         .json({ erro: "E-mail inválido.", codigo: "EMAIL_INVALIDO" });
       return;
     }
+    const emailNormalizado = email.trim().toLowerCase();
     if (!validarCpf(cpf)) {
       res.status(422).json({ erro: "CPF inválido.", codigo: "CPF_INVALIDO" });
       return;
@@ -110,22 +116,13 @@ export async function cadastrarAluno(
     }
 
     const duplicado = await CadastroModel.verificarDuplicado(
-      email,
+      emailNormalizado,
       cpf.replace(/\D/g, ""),
     );
     if (duplicado.rows.length > 0) {
       res
         .status(409)
         .json({ erro: "CPF ou e-mail já cadastrado.", codigo: "DUPLICADO" });
-      return;
-    }
-
-    const { data: authData, error: authError } =
-      await CadastroModel.criarNoAuth(email, senha);
-    if (authError || !authData.user) {
-      res
-        .status(500)
-        .json({ erro: "Erro ao criar credenciais.", codigo: "ERRO_AUTH" });
       return;
     }
 
@@ -137,15 +134,15 @@ export async function cadastrarAluno(
     await client.query("BEGIN");
 
     const { rows } = await CadastroModel.inserirUsuario(client, {
-      authId: authData.user.id,
       nome: nomeTrimmed,
       cpf: cpf.replace(/\D/g, ""),
-      email,
+      email: emailNormalizado,
+      senhaHash: await bcrypt.hash(senha, 12),
       sexo,
     });
     const id_usuario = rows[0].id;
 
-    await CadastroModel.inserirAluno(client, {
+    const { rows: alunoRows } = await CadastroModel.inserirAluno(client, {
       idUsuario: id_usuario,
       deficiencia: deficienciaVal,
       restricaoMedica: restricaoVal,
@@ -155,9 +152,24 @@ export async function cadastrarAluno(
     });
 
     await client.query("COMMIT");
-    res
-      .status(201)
-      .json({ id_aluno: id_usuario, status, requer_documento: temRestricao });
+    try {
+      await enviarCodigoVerificacaoCadastro(id_usuario, emailNormalizado);
+    } catch {
+      res.status(503).json({
+        erro: "Cadastro criado, mas não foi possível enviar o código. Solicite novo envio.",
+        codigo: "EMAIL_ENVIO_FALHOU",
+        id_aluno: id_usuario,
+        email_verification_required: true,
+      });
+      return;
+    }
+    res.status(201).json({
+      id_aluno: id_usuario,
+      status,
+      requer_documento: temRestricao,
+      prazo_envio_laudo: alunoRows[0].prazo_envio_laudo,
+      email_verification_required: true,
+    });
   } catch (err) {
     await client.query("ROLLBACK");
     next(err);
@@ -180,6 +192,13 @@ export async function uploadDocumento(
         .json({ erro: "Arquivo PDF obrigatório.", codigo: "ARQUIVO_AUSENTE" });
       return;
     }
+    if (req.file.buffer.subarray(0, 5).toString("ascii") !== "%PDF-") {
+      res.status(422).json({
+        erro: "O conteúdo enviado não é um arquivo PDF válido.",
+        codigo: "ARQUIVO_INVALIDO",
+      });
+      return;
+    }
 
     const { rows } = await CadastroModel.buscarAlunoPendente(id_aluno);
     if (rows.length === 0) {
@@ -198,24 +217,19 @@ export async function uploadDocumento(
       });
       return;
     }
-
-    const bucket = process.env.STORAGE_BUCKET_LAUDOS ?? "laudos";
-    const nomeArquivo = nomeArquivoSeguro(req.file.originalname);
-    const caminho = `laudos/${id_aluno}/${nomeArquivo}`;
-
-    const { error: storageError } = await supabaseAdmin.storage
-      .from(bucket)
-      .upload(caminho, req.file.buffer, {
-        contentType: "application/pdf",
-        upsert: false,
+    if (rows[0].tem_documento) {
+      res.status(409).json({
+        erro: "Já existe um laudo aguardando análise ou aprovado.",
+        codigo: "DOCUMENTO_JA_ENVIADO",
       });
-
-    if (storageError) {
-      res
-        .status(500)
-        .json({ erro: "Erro ao armazenar arquivo.", codigo: "STORAGE_ERRO" });
       return;
     }
+
+    const nomeArquivo = nomeArquivoSeguro(req.file.originalname);
+    const pastaLaudos = path.resolve(process.env.UPLOAD_DIR ?? "uploads", "laudos", id_aluno);
+    const caminho = path.join("laudos", id_aluno, nomeArquivo);
+    await mkdir(pastaLaudos, { recursive: true });
+    await writeFile(path.join(pastaLaudos, nomeArquivo), req.file.buffer, { flag: "wx" });
 
     const { rows: docRows } = await CadastroModel.inserirDocumento(
       id_aluno,
@@ -224,6 +238,13 @@ export async function uploadDocumento(
     );
     res.status(201).json({ id_documento: docRows[0].id, status: "pendente" });
   } catch (err) {
+    if ((err as { code?: string })?.code === "23505") {
+      res.status(409).json({
+        erro: "Já existe um laudo aguardando análise ou aprovado.",
+        codigo: "DOCUMENTO_JA_ENVIADO",
+      });
+      return;
+    }
     next(err);
   }
 }
@@ -247,6 +268,8 @@ export async function listarCadastros(
     const { rows } = await CadastroModel.listar({
       status,
       busca,
+      isInstrutor: req.user!.perfil === "instrutor",
+      instrutorId: req.user!.id_usuario,
       porPagina,
       offset,
     });
@@ -262,11 +285,16 @@ export async function listarCadastros(
               id_documento: r.id_documento,
               caminho_arquivo: r.caminho_arquivo,
               nome_arquivo: r.nome_arquivo,
+              status: r.status_documento,
+              motivo_rejeicao: r.motivo_rejeicao,
             }
           : null,
         cadastrado_em: r.cadastrado_em,
+        email_verificado: r.email_verificado,
         deficiencia: r.deficiencia,
         restricao_medica: r.restricao_medica,
+        prazo_envio_laudo: r.prazo_envio_laudo,
+        prazo_laudo_expirado: new Date(r.prazo_envio_laudo).getTime() < Date.now(),
       })),
       total,
       pagina,
@@ -300,11 +328,30 @@ export async function aprovarCadastro(
 
     const aluno = alunoRows[0];
 
-    // Se tem restrição, exige documento PDF aprovado (ou pendente)
-    if (aluno.tem_restricao && !aluno.tem_documento) {
+    if (!aluno.email_verificado) {
       res.status(422).json({
-        erro: "Aluno declarou restrição/deficiência mas não possui laudo anexado.",
-        codigo: "DOCUMENTO_AUSENTE",
+        erro: "O aluno precisa confirmar o e-mail antes da aprovação.",
+        codigo: "EMAIL_NAO_VERIFICADO",
+      });
+      return;
+    }
+
+    if (
+      req.user!.perfil === "instrutor" &&
+      aluno.id_instrutor !== req.user!.id_usuario
+    ) {
+      res.status(403).json({
+        erro: "Instrutores só podem aprovar alunos vinculados à sua conta.",
+        codigo: "SEM_PERMISSAO",
+      });
+      return;
+    }
+
+    // Se tem restrição, exige documento PDF aprovado (ou pendente)
+    if (aluno.tem_restricao && !aluno.tem_documento_aprovado) {
+      res.status(422).json({
+        erro: "A documentação comprobatória precisa ser aprovada antes do cadastro.",
+        codigo: "DOCUMENTO_NAO_APROVADO",
       });
       return;
     }
@@ -318,8 +365,104 @@ export async function aprovarCadastro(
       return;
     }
 
-    await CadastroModel.aprovarDocumentos(id_aluno);
     res.json({ id_aluno: Number(id_aluno), status: "ativo" });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function verDocumento(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { id_aluno, id_documento } = req.params;
+    const { rows } = await CadastroModel.buscarDocumento(id_aluno, id_documento);
+    if (rows.length === 0) {
+      res.status(404).json({ erro: "Documento não encontrado.", codigo: "NAO_ENCONTRADO" });
+      return;
+    }
+    if (
+      req.user!.perfil === "instrutor" &&
+      rows[0].id_instrutor !== req.user!.id_usuario
+    ) {
+      res.status(403).json({ erro: "Acesso não autorizado.", codigo: "SEM_PERMISSAO" });
+      return;
+    }
+
+    const pastaUploads = path.resolve(process.env.UPLOAD_DIR ?? "uploads");
+    const arquivo = path.resolve(pastaUploads, rows[0].caminho_arquivo);
+    if (!arquivo.startsWith(`${pastaUploads}${path.sep}`)) {
+      res.status(400).json({ erro: "Caminho de arquivo inválido.", codigo: "ARQUIVO_INVALIDO" });
+      return;
+    }
+    res.sendFile(arquivo, { headers: { "Content-Type": "application/pdf" } }, (err) => {
+      if (err) next(err);
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function aprovarDocumento(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { id_aluno, id_documento } = req.params;
+    const { rows } = await CadastroModel.aprovarDocumento(id_aluno, id_documento);
+    if (rows.length === 0) {
+      res.status(404).json({ erro: "Documento pendente não encontrado.", codigo: "NAO_ENCONTRADO" });
+      return;
+    }
+    res.json({ id_documento: Number(id_documento), status: "aprovado" });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function rejeitarDocumento(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { id_aluno, id_documento } = req.params;
+    const { motivo_rejeicao } = req.body;
+    if (typeof motivo_rejeicao !== "string" || !motivo_rejeicao.trim()) {
+      res.status(400).json({ erro: "motivo_rejeicao obrigatório.", codigo: "CAMPOS_OBRIGATORIOS" });
+      return;
+    }
+    const { rows: documento } = await CadastroModel.buscarDocumento(id_aluno, id_documento);
+    if (documento.length === 0 || documento[0].status !== "pendente") {
+      res.status(404).json({ erro: "Documento pendente não encontrado.", codigo: "NAO_ENCONTRADO" });
+      return;
+    }
+    const { rows } = await CadastroModel.rejeitarDocumento(
+      id_aluno,
+      id_documento,
+      motivo_rejeicao.trim(),
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ erro: "Documento pendente não encontrado.", codigo: "NAO_ENCONTRADO" });
+      return;
+    }
+    let notificacaoEnviada = true;
+    try {
+      await enviarEmail(
+        documento[0].email,
+        laudoRejeitadoEmail(motivo_rejeicao.trim()),
+      );
+    } catch {
+      notificacaoEnviada = false;
+    }
+    res.json({
+      id_documento: Number(id_documento),
+      status: "rejeitado",
+      notificacao_enviada: notificacaoEnviada,
+    });
   } catch (err) {
     next(err);
   }

@@ -20,7 +20,7 @@ export async function iniciarSessao(
       return;
     }
 
-    const id_usuario = await SessaoModel.buscarIdPorAuthId(req.user!.id);
+    const id_usuario = req.user!.id_usuario;
     if (!id_usuario) {
       res
         .status(404)
@@ -64,7 +64,7 @@ export async function sessaoAtiva(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const id_usuario = await SessaoModel.buscarIdPorAuthId(req.user!.id);
+    const id_usuario = req.user!.id_usuario;
     if (!id_usuario) {
       res
         .status(404)
@@ -115,7 +115,7 @@ export async function registrarSerie(
       return;
     }
 
-    const id_usuario = await SessaoModel.buscarIdPorAuthId(req.user!.id);
+    const id_usuario = req.user!.id_usuario;
 
     const { rows: sRows } = await SessaoModel.verificarSessaoDoAluno(
       idSessao,
@@ -158,7 +158,7 @@ export async function finalizarSessao(
     const { id_sessao } = req.params;
     const { duracao_segundos, volume_total } = req.body;
 
-    const id_usuario = await SessaoModel.buscarIdPorAuthId(req.user!.id);
+    const id_usuario = req.user!.id_usuario;
 
     const { rows } = await SessaoModel.finalizar(id_sessao, id_usuario!);
     if (rows.length === 0) {
@@ -199,7 +199,7 @@ export async function abandonarSessao(
 ): Promise<void> {
   try {
     const { id_sessao } = req.params;
-    const id_usuario = await SessaoModel.buscarIdPorAuthId(req.user!.id);
+    const id_usuario = req.user!.id_usuario;
 
     const { rows } = await SessaoModel.abandonar(id_sessao, id_usuario!);
     if (rows.length === 0) {

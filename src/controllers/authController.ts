@@ -1,8 +1,51 @@
+import { createHmac, randomInt } from "node:crypto";
+import bcrypt from "bcryptjs";
 import { Request, Response, NextFunction } from "express";
 import * as AuthModel from "../models/authModel";
+import { enviarEmail } from "../services/email";
+import { enviarCodigoVerificacaoCadastro } from "../services/emailVerification";
+import {
+  loginAdminEmail,
+  recuperacaoSenhaEmail,
+} from "../services/emailTemplates";
+import {
+  criarAccessToken,
+  criarTokenUploadLaudo,
+  criarRefreshToken,
+  novoIdSessao,
+  verificarRefreshToken,
+} from "../config/tokens";
+import { Perfil } from "../types";
 import { validarSenha, validarEmail } from "../utils/validate";
 
-// POST /auth/login
+const hash = (value: string) =>
+  createHmac("sha256", process.env.JWT_SECRET!).update(value).digest("hex");
+
+async function emitirSessao(
+  usuario: NonNullable<Awaited<ReturnType<typeof AuthModel.buscarUsuarioPorEmail>>>,
+  res: Response,
+): Promise<void> {
+  const sessionId = novoIdSessao();
+  const refreshToken = criarRefreshToken(usuario.id, sessionId);
+  await AuthModel.criarSessao(usuario.id, sessionId, hash(refreshToken));
+  res.json({
+    access_token: criarAccessToken(usuario.id, usuario.perfil as Perfil, sessionId),
+    refresh_token: refreshToken,
+    expires_in: 900,
+    expires_at: Math.floor(Date.now() / 1000) + 900,
+    usuario: { id: usuario.id, nome: usuario.nome, perfil: usuario.perfil },
+  });
+}
+
+function erroResposta(
+  res: Response,
+  status: number,
+  erro: string,
+  codigo: string,
+): void {
+  res.status(status).json({ erro, codigo });
+}
+
 export async function login(
   req: Request,
   res: Response,
@@ -10,222 +53,247 @@ export async function login(
 ): Promise<void> {
   try {
     const { email, senha } = req.body;
-
-    if (!email || !senha || !email.trim() || !senha.trim()) {
-      res
-        .status(400)
-        .json({
-          erro: "Email e senha são obrigatórios.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+    if (typeof email !== "string" || typeof senha !== "string" || !email || !senha) {
+      erroResposta(res, 400, "Email e senha são obrigatórios.", "CAMPOS_OBRIGATORIOS");
       return;
     }
     if (!validarEmail(email)) {
-      res
-        .status(400)
-        .json({ erro: "Email inválido.", codigo: "EMAIL_INVALIDO" });
+      erroResposta(res, 400, "Email inválido.", "EMAIL_INVALIDO");
       return;
     }
 
-    const { data, error } = await AuthModel.signInSupabase(email, senha);
-
-    if (error || !data.session) {
-      res
-        .status(401)
-        .json({
-          erro: "Credenciais inválidas.",
-          codigo: "CREDENCIAIS_INVALIDAS",
-        });
+    const usuario = await AuthModel.buscarUsuarioPorEmail(email);
+    if (!usuario || !(await bcrypt.compare(senha, usuario.senha_hash))) {
+      erroResposta(res, 401, "Credenciais inválidas.", "CREDENCIAIS_INVALIDAS");
       return;
     }
-
-    const usuario = await AuthModel.buscarUsuarioPorAuthId(data.user.id);
-
-    if (!usuario) {
-      res
-        .status(401)
-        .json({
-          erro: "Usuário não encontrado.",
-          codigo: "USUARIO_NAO_ENCONTRADO",
-        });
+    if (!usuario.email_verificado) {
+      erroResposta(
+        res,
+        403,
+        "Confirme seu e-mail antes de entrar.",
+        "EMAIL_NAO_VERIFICADO",
+      );
       return;
     }
-
     if (usuario.perfil === "aluno" && usuario.status !== "ativo") {
-      res
-        .status(403)
-        .json({
-          erro: "Cadastro pendente de aprovação.",
-          codigo: "CADASTRO_INATIVO",
-        });
+      erroResposta(res, 403, "Cadastro pendente de aprovação.", "CADASTRO_INATIVO");
       return;
     }
 
-    // Retorna access_token + refresh_token para o front gerenciar a sessão
-    // conforme a política de cada perfil (admin=sessionStorage, instrutor=1d, aluno=7d)
-    res.json({
-      access_token: data.session.access_token,
-      refresh_token: data.session.refresh_token,
-      expires_in: data.session.expires_in, // segundos até expirar (normalmente 3600)
-      expires_at: data.session.expires_at, // unix timestamp da expiração
-      usuario: { id: usuario.id, nome: usuario.nome, perfil: usuario.perfil },
-    });
+    if (usuario.perfil === "admin" || usuario.perfil === "recepcionista") {
+      const codigo = String(randomInt(0, 1_000_000)).padStart(6, "0");
+      await AuthModel.salvarCodigoEmail(usuario.id, "login_admin", hash(codigo));
+      await enviarEmail(usuario.email, loginAdminEmail(codigo));
+      res.json({
+        email_verification_required: true,
+        mensagem: "Enviamos um código de confirmação para o e-mail da conta.",
+      });
+      return;
+    }
+
+    await emitirSessao(usuario, res);
   } catch (err) {
     next(err);
   }
 }
 
-// POST /auth/refresh
-// Front envia o refresh_token; backend renova e devolve novos tokens
-export async function refreshToken(
+export async function reenviarVerificacaoEmail(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { refresh_token } = req.body;
-
-    if (!refresh_token || typeof refresh_token !== "string") {
-      res
-        .status(400)
-        .json({
-          erro: "refresh_token obrigatório.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+    const { email } = req.body;
+    if (typeof email !== "string" || !validarEmail(email)) {
+      erroResposta(res, 400, "Email válido obrigatório.", "EMAIL_INVALIDO");
       return;
     }
-
-    const { data, error } = await AuthModel.refreshSession(refresh_token);
-
-    if (error || !data.session) {
-      res
-        .status(401)
-        .json({
-          erro: "Refresh token inválido ou expirado.",
-          codigo: "REFRESH_INVALIDO",
-        });
-      return;
+    const usuario = await AuthModel.buscarUsuarioParaVerificacao(email);
+    if (usuario && !usuario.email_verificado) {
+      await enviarCodigoVerificacaoCadastro(usuario.id, usuario.email);
     }
-
     res.json({
-      access_token: data.session.access_token,
-      refresh_token: data.session.refresh_token,
-      expires_in: data.session.expires_in,
-      expires_at: data.session.expires_at,
+      mensagem: "Se houver uma conta não confirmada, enviaremos um código para o e-mail informado.",
     });
   } catch (err) {
     next(err);
   }
 }
 
-// POST /auth/logout
-// Invalida o refresh_token no Supabase (server-side logout)
+export async function verificarEmailCadastro(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { email, codigo } = req.body;
+    if (
+      typeof email !== "string" ||
+      !validarEmail(email) ||
+      typeof codigo !== "string" ||
+      !/^\d{6}$/.test(codigo)
+    ) {
+      erroResposta(res, 400, "Email válido e código de 6 dígitos são obrigatórios.", "CAMPOS_OBRIGATORIOS");
+      return;
+    }
+    const usuario = await AuthModel.buscarUsuarioParaVerificacao(email);
+    const verificado = usuario && !usuario.email_verificado
+      ? await AuthModel.verificarEmailComCodigo(usuario.id, hash(codigo))
+      : null;
+    if (!usuario || !verificado) {
+      erroResposta(res, 400, "Código inválido ou expirado.", "CODIGO_INVALIDO");
+      return;
+    }
+    res.json({
+      email_verificado: true,
+      mensagem:
+        usuario.perfil === "aluno" && usuario.status === "pendente"
+          ? "E-mail confirmado. Aguarde a aprovação do cadastro."
+          : "E-mail confirmado com sucesso.",
+      ...(usuario.perfil === "aluno" &&
+      usuario.status === "pendente" &&
+      usuario.tem_restricao &&
+      !usuario.tem_documento
+        ? { cadastro_token: criarTokenUploadLaudo(usuario.id) }
+        : {}),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function solicitarTokenUploadLaudo(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { email, senha } = req.body;
+    if (typeof email !== "string" || typeof senha !== "string") {
+      erroResposta(res, 400, "Email e senha são obrigatórios.", "CAMPOS_OBRIGATORIOS");
+      return;
+    }
+    const usuario = await AuthModel.buscarUsuarioPorEmail(email);
+    if (!usuario || !(await bcrypt.compare(senha, usuario.senha_hash))) {
+      erroResposta(res, 401, "Credenciais inválidas.", "CREDENCIAIS_INVALIDAS");
+      return;
+    }
+    if (!usuario.email_verificado) {
+      erroResposta(res, 403, "Confirme seu e-mail antes de solicitar o upload.", "EMAIL_NAO_VERIFICADO");
+      return;
+    }
+    if (
+      usuario.perfil !== "aluno" ||
+      usuario.status !== "pendente" ||
+      !usuario.tem_restricao ||
+      usuario.tem_documento
+    ) {
+      erroResposta(res, 403, "Não há laudo pendente para esta conta.", "UPLOAD_NAO_DISPONIVEL");
+      return;
+    }
+    res.json({
+      cadastro_token: criarTokenUploadLaudo(usuario.id),
+      expires_in: 1800,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function refreshToken(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  try {
+    const { refresh_token: token } = req.body;
+    if (typeof token !== "string" || !token) {
+      erroResposta(res, 400, "refresh_token obrigatório.", "CAMPOS_OBRIGATORIOS");
+      return;
+    }
+    const claims = verificarRefreshToken(token);
+    const usuarioId = Number(claims.sub);
+    const sessao = await AuthModel.buscarSessao(claims.sid, usuarioId);
+    if (!sessao || sessao.refresh_token_hash !== hash(token)) {
+      erroResposta(res, 401, "Refresh token inválido ou expirado.", "REFRESH_INVALIDO");
+      return;
+    }
+    const usuario = await AuthModel.buscarUsuarioPorId(usuarioId);
+    if (!usuario) {
+      erroResposta(res, 401, "Usuário não encontrado.", "USUARIO_NAO_ENCONTRADO");
+      return;
+    }
+    if (!usuario.email_verificado) {
+      await AuthModel.revogarSessoesDoUsuario(usuarioId);
+      erroResposta(res, 401, "Confirme seu e-mail antes de entrar.", "EMAIL_NAO_VERIFICADO");
+      return;
+    }
+    const novoRefreshToken = criarRefreshToken(usuarioId, claims.sid);
+    await AuthModel.atualizarRefreshToken(claims.sid, hash(novoRefreshToken));
+    res.json({
+      access_token: criarAccessToken(usuarioId, usuario.perfil as Perfil, claims.sid),
+      refresh_token: novoRefreshToken,
+      expires_in: 900,
+      expires_at: Math.floor(Date.now() / 1000) + 900,
+    });
+  } catch {
+    erroResposta(res, 401, "Refresh token inválido ou expirado.", "REFRESH_INVALIDO");
+  }
+}
+
 export async function logout(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
-    // O front deve enviar o access_token no header Authorization (já validado pelo authMiddleware)
-    // Aqui apenas sinalizamos sucesso; o front limpa o storage
-    // Para invalidação total server-side, usamos signOut com scope global
-    await AuthModel.signOut(req.user!.id);
+    await AuthModel.revogarSessao(req.user!.session_id);
     res.json({ mensagem: "Logout realizado com sucesso." });
   } catch (err) {
     next(err);
   }
 }
 
-// POST /auth/mfa/enviar
-// Usuário já logado solicita o código OTP — chama antes de ação sensível
-export async function enviarMfa(
+export async function verificarLoginAdmin(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
-    const email = await AuthModel.buscarEmailPorAuthId(req.user!.id);
-    if (!email) {
-      res
-        .status(404)
-        .json({
-          erro: "Usuário não encontrado.",
-          codigo: "USUARIO_NAO_ENCONTRADO",
-        });
+    const { email, codigo } = req.body;
+    if (
+      typeof email !== "string" ||
+      !validarEmail(email) ||
+      typeof codigo !== "string" ||
+      !/^\d{6}$/.test(codigo)
+    ) {
+      erroResposta(res, 400, "Email e código de 6 dígitos são obrigatórios.", "CAMPOS_OBRIGATORIOS");
       return;
     }
-
-    const { error } = await AuthModel.enviarOtpEmail(email);
-    if (error) {
-      res
-        .status(400)
-        .json({
-          erro: "Não foi possível enviar o código.",
-          codigo: "OTP_ENVIO_FALHOU",
-        });
+    const usuario = await AuthModel.buscarUsuarioPorEmail(email);
+    if (
+      !usuario ||
+      !["admin", "recepcionista"].includes(usuario.perfil) ||
+      !usuario.email_verificado
+    ) {
+      erroResposta(res, 401, "Código inválido ou expirado.", "CODIGO_INVALIDO");
       return;
     }
-
-    res.json({ mensagem: "Código enviado para o seu e-mail." });
+    const confirmado = await AuthModel.consumirCodigoEmail(
+      usuario.id,
+      "login_admin",
+      hash(codigo),
+    );
+    if (!confirmado) {
+      erroResposta(res, 401, "Código inválido ou expirado.", "CODIGO_INVALIDO");
+      return;
+    }
+    await emitirSessao(usuario, res);
   } catch (err) {
     next(err);
   }
 }
 
-// POST /auth/mfa/verificar
-// Usuário envia o código de 6 dígitos recebido no email
-export async function verificarMfa(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  try {
-    const { codigo } = req.body;
-
-    if (!codigo || typeof codigo !== "string" || !/^\d{6}$/.test(codigo)) {
-      res
-        .status(400)
-        .json({
-          erro: "Código inválido. Deve ter exatamente 6 dígitos.",
-          codigo: "CODIGO_INVALIDO",
-        });
-      return;
-    }
-
-    const email = await AuthModel.buscarEmailPorAuthId(req.user!.id);
-    if (!email) {
-      res
-        .status(404)
-        .json({
-          erro: "Usuário não encontrado.",
-          codigo: "USUARIO_NAO_ENCONTRADO",
-        });
-      return;
-    }
-
-    const { data, error } = await AuthModel.verificarOtpEmail(email, codigo);
-    if (error || !data.session) {
-      res
-        .status(401)
-        .json({
-          erro: "Código inválido ou expirado.",
-          codigo: "CODIGO_INVALIDO",
-        });
-      return;
-    }
-
-    // Devolve novos tokens — o access_token agora tem MFA verificado
-    res.json({
-      mensagem: "MFA verificado com sucesso.",
-      access_token: data.session.access_token,
-      refresh_token: data.session.refresh_token,
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-// POST /auth/esqueci-senha
 export async function esqueciSenha(
   req: Request,
   res: Response,
@@ -233,21 +301,59 @@ export async function esqueciSenha(
 ): Promise<void> {
   try {
     const { email } = req.body;
-    if (!email || !validarEmail(email)) {
-      res
-        .status(400)
-        .json({ erro: "Email válido obrigatório.", codigo: "EMAIL_INVALIDO" });
+    if (typeof email !== "string" || !validarEmail(email)) {
+      erroResposta(res, 400, "Email válido obrigatório.", "EMAIL_INVALIDO");
       return;
     }
-
-    await AuthModel.resetarSenhaEmail(email);
-    res.json({ mensagem: "E-mail de recuperação enviado." });
+    const usuario = await AuthModel.buscarUsuarioPorEmail(email);
+    if (usuario) {
+      const codigo = String(randomInt(0, 1_000_000)).padStart(6, "0");
+      await AuthModel.salvarCodigoEmail(usuario.id, "recuperacao_senha", hash(codigo));
+      await enviarEmail(email, recuperacaoSenhaEmail(codigo));
+    }
+    res.json({ mensagem: "Se o e-mail estiver cadastrado, enviaremos um código de recuperação." });
   } catch (err) {
     next(err);
   }
 }
 
-// PATCH /auth/alterar-senha
+export async function redefinirSenha(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { email, codigo, nova_senha } = req.body;
+    if (
+      typeof email !== "string" ||
+      !validarEmail(email) ||
+      typeof codigo !== "string" ||
+      !/^\d{6}$/.test(codigo) ||
+      typeof nova_senha !== "string"
+    ) {
+      erroResposta(res, 400, "Email, código e nova_senha são obrigatórios.", "CAMPOS_OBRIGATORIOS");
+      return;
+    }
+    if (!validarSenha(nova_senha)) {
+      erroResposta(res, 422, "Senha deve ter no mínimo 8 caracteres, 1 maiúscula, 1 minúscula, 1 número e 1 caractere especial.", "SENHA_FRACA");
+      return;
+    }
+    const usuario = await AuthModel.buscarUsuarioPorEmail(email);
+    const confirmado = usuario
+      ? await AuthModel.consumirCodigoEmail(usuario.id, "recuperacao_senha", hash(codigo))
+      : null;
+    if (!usuario || !confirmado) {
+      erroResposta(res, 400, "Código inválido ou expirado.", "CODIGO_INVALIDO");
+      return;
+    }
+    await AuthModel.atualizarSenha(usuario.id, await bcrypt.hash(nova_senha, 12));
+    await AuthModel.revogarSessoesDoUsuario(usuario.id);
+    res.json({ mensagem: "Senha redefinida com sucesso." });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function alterarSenha(
   req: Request,
   res: Response,
@@ -255,82 +361,31 @@ export async function alterarSenha(
 ): Promise<void> {
   try {
     const { senha_atual, nova_senha } = req.body;
-
-    if (!senha_atual || !nova_senha) {
-      res
-        .status(400)
-        .json({
-          erro: "senha_atual e nova_senha são obrigatórias.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+    if (typeof senha_atual !== "string" || typeof nova_senha !== "string") {
+      erroResposta(res, 400, "senha_atual e nova_senha são obrigatórias.", "CAMPOS_OBRIGATORIOS");
       return;
     }
-
-    // Confirma a senha atual tentando um signIn com o email do próprio usuário
-    const email = await AuthModel.buscarEmailPorAuthId(req.user!.id);
-    if (!email) {
-      res
-        .status(404)
-        .json({
-          erro: "Usuário não encontrado.",
-          codigo: "USUARIO_NAO_ENCONTRADO",
-        });
+    const usuario = await AuthModel.buscarUsuarioPorId(req.user!.id_usuario);
+    if (!usuario || !(await bcrypt.compare(senha_atual, usuario.senha_hash))) {
+      erroResposta(res, 401, "Senha atual incorreta.", "SENHA_ATUAL_INVALIDA");
       return;
     }
-
-    const { error: erroLogin } = await AuthModel.signInSupabase(
-      email,
-      senha_atual,
-    );
-    if (erroLogin) {
-      res
-        .status(401)
-        .json({
-          erro: "Senha atual incorreta.",
-          codigo: "SENHA_ATUAL_INVALIDA",
-        });
-      return;
-    }
-
     if (!validarSenha(nova_senha)) {
-      res.status(422).json({
-        erro: "Senha deve ter no mínimo 8 caracteres, 1 maiúscula, 1 minúscula, 1 número e 1 caractere especial.",
-        codigo: "SENHA_FRACA",
-      });
+      erroResposta(res, 422, "Senha deve ter no mínimo 8 caracteres, 1 maiúscula, 1 minúscula, 1 número e 1 caractere especial.", "SENHA_FRACA");
       return;
     }
-
     if (senha_atual === nova_senha) {
-      res
-        .status(422)
-        .json({
-          erro: "A nova senha deve ser diferente da atual.",
-          codigo: "SENHA_IGUAL",
-        });
+      erroResposta(res, 422, "A nova senha deve ser diferente da atual.", "SENHA_IGUAL");
       return;
     }
-
-    const { error } = await AuthModel.alterarSenhaAuth(
-      req.user!.id,
-      nova_senha,
-    );
-    if (error) {
-      res
-        .status(400)
-        .json({
-          erro: "Não foi possível alterar a senha.",
-          codigo: "ALTERACAO_FALHOU",
-        });
-      return;
-    }
-
-    res.json({ mensagem: "Senha alterada com sucesso." });
+    await AuthModel.atualizarSenha(usuario.id, await bcrypt.hash(nova_senha, 12));
+    await AuthModel.revogarSessoesDoUsuario(usuario.id);
+    res.json({ mensagem: "Senha alterada com sucesso. Entre novamente com a nova senha." });
   } catch (err) {
     next(err);
   }
 }
 
-// PATCH /auth/alterar-email
 export async function alterarEmail(
   req: Request,
   res: Response,
@@ -338,87 +393,44 @@ export async function alterarEmail(
 ): Promise<void> {
   try {
     const { senha_atual, novo_email } = req.body;
-
-    if (!senha_atual || !novo_email) {
-      res
-        .status(400)
-        .json({
-          erro: "senha_atual e novo_email são obrigatórios.",
-          codigo: "CAMPOS_OBRIGATORIOS",
-        });
+    if (typeof senha_atual !== "string" || typeof novo_email !== "string") {
+      erroResposta(res, 400, "senha_atual e novo_email são obrigatórios.", "CAMPOS_OBRIGATORIOS");
       return;
     }
-
     if (!validarEmail(novo_email)) {
-      res
-        .status(400)
-        .json({
-          erro: "novo_email válido obrigatório.",
-          codigo: "EMAIL_INVALIDO",
-        });
+      erroResposta(res, 400, "novo_email válido obrigatório.", "EMAIL_INVALIDO");
       return;
     }
-
-    // Confirma a senha atual antes de qualquer alteração
-    const emailAtual = await AuthModel.buscarEmailPorAuthId(req.user!.id);
-    if (!emailAtual) {
-      res
-        .status(404)
-        .json({
-          erro: "Usuário não encontrado.",
-          codigo: "USUARIO_NAO_ENCONTRADO",
-        });
+    const usuario = await AuthModel.buscarUsuarioPorId(req.user!.id_usuario);
+    if (!usuario || !(await bcrypt.compare(senha_atual, usuario.senha_hash))) {
+      erroResposta(res, 401, "Senha atual incorreta.", "SENHA_ATUAL_INVALIDA");
       return;
     }
-
-    const { error: erroLogin } = await AuthModel.signInSupabase(
-      emailAtual,
-      senha_atual,
-    );
-    if (erroLogin) {
-      res
-        .status(401)
-        .json({
-          erro: "Senha atual incorreta.",
-          codigo: "SENHA_ATUAL_INVALIDA",
-        });
+    if (novo_email.toLowerCase() === usuario.email.toLowerCase()) {
+      erroResposta(res, 422, "O novo e-mail deve ser diferente do atual.", "EMAIL_IGUAL");
       return;
     }
-
-    if (novo_email === emailAtual) {
-      res
-        .status(422)
-        .json({
-          erro: "O novo e-mail deve ser diferente do atual.",
-          codigo: "EMAIL_IGUAL",
-        });
+    if (await AuthModel.buscarEmailExistente(novo_email)) {
+      erroResposta(res, 409, "E-mail já em uso.", "EMAIL_DUPLICADO");
       return;
     }
-
-    const emailEmUso = await AuthModel.buscarEmailExistente(novo_email);
-    if (emailEmUso) {
-      res
-        .status(409)
-        .json({ erro: "E-mail já em uso.", codigo: "EMAIL_DUPLICADO" });
+    const emailNormalizado = novo_email.trim().toLowerCase();
+    await AuthModel.atualizarEmail(req.user!.id_usuario, emailNormalizado);
+    await AuthModel.revogarSessoesDoUsuario(req.user!.id_usuario);
+    try {
+      await enviarCodigoVerificacaoCadastro(req.user!.id_usuario, emailNormalizado);
+    } catch {
+      res.status(503).json({
+        erro: "E-mail atualizado, mas não foi possível enviar o código. Solicite novo envio.",
+        codigo: "EMAIL_ENVIO_FALHOU",
+        email_verification_required: true,
+      });
       return;
     }
-
-    const { error } = await AuthModel.alterarEmailAuth(
-      req.user!.id,
-      novo_email,
-    );
-    if (error) {
-      res
-        .status(400)
-        .json({
-          erro: "Não foi possível alterar o e-mail.",
-          codigo: "ALTERACAO_FALHOU",
-        });
-      return;
-    }
-
-    await AuthModel.atualizarEmailUsuario(novo_email, req.user!.id);
-    res.json({ mensagem: "E-mail alterado com sucesso." });
+    res.json({
+      mensagem: "E-mail atualizado. Confirme o novo endereço para entrar novamente.",
+      email_verification_required: true,
+    });
   } catch (err) {
     next(err);
   }

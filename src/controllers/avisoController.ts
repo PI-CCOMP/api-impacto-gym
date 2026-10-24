@@ -58,14 +58,7 @@ export async function criarAviso(
       return;
     }
 
-    const { rows: uRows } = await AvisoModel.buscarIdPorAuthId(req.user!.id);
-    const id_autor = uRows[0]?.id;
-    if (!id_autor) {
-      res.status(404).json({ erro: "Usuário não encontrado.", codigo: "NAO_ENCONTRADO" });
-      return;
-    }
-
-    const { rows } = await AvisoModel.inserir(titulo, mensagem, id_autor);
+    const { rows } = await AvisoModel.inserir(titulo, mensagem, req.user!.id_usuario);
     res.status(201).json({ id_aviso: rows[0].id, publicado_em: rows[0].criado_em });
   } catch (err) {
     next(err);

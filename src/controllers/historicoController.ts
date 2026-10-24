@@ -8,8 +8,7 @@ export async function meuHistorico(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { rows: uRows } = await HistoricoModel.buscarIdPorAuthId(req.user!.id);
-    const id_usuario = uRows[0]?.id;
+    const id_usuario = req.user!.id_usuario;
     if (!id_usuario) {
       res.status(404).json({ erro: "Usuário não encontrado.", codigo: "NAO_ENCONTRADO" });
       return;
@@ -30,8 +29,7 @@ export async function detalheHistorico(
 ): Promise<void> {
   try {
     const { id_historico } = req.params;
-    const { rows: uRows } = await HistoricoModel.buscarIdPorAuthId(req.user!.id);
-    const id_usuario = uRows[0]?.id;
+    const id_usuario = req.user!.id_usuario;
 
     const { rows } = await HistoricoModel.buscarDetalhe(id_historico, id_usuario);
     if (rows.length === 0) {

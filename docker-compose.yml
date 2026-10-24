@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: impacto-gym-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: impacto_gym
+      POSTGRES_USER: impacto_gym
+      POSTGRES_PASSWORD: impacto_gym_local
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+      - ./migrations/001_email_verification.sql:/docker-entrypoint-initdb.d/002-email-verification.sql:ro
+      - ./migrations/002_sexo_prazo_laudo.sql:/docker-entrypoint-initdb.d/003-sexo-prazo-laudo.sql:ro
+      - ./migrations/003_document_unique.sql:/docker-entrypoint-initdb.d/004-document-unique.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U impacto_gym -d impacto_gym"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

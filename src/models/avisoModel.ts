@@ -11,8 +11,8 @@ export async function listar() {
   return pool.query(QUERY_AVISOS);
 }
 
-export async function buscarIdPorAuthId(authId: string) {
-  return pool.query("SELECT id FROM usuarios WHERE id_auth = $1", [authId]);
+export async function buscarIdPorUsuarioId(idUsuario: number) {
+  return pool.query("SELECT id FROM usuarios WHERE id = $1", [idUsuario]);
 }
 
 export async function inserir(titulo: string, mensagem: string, idAutor: number) {

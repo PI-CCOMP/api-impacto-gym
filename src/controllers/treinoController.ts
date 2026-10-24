@@ -10,8 +10,8 @@ export async function meusTreinos(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { rows: usuarioRows } = await TreinoModel.buscarIdPorAuthId(
-      req.user!.id,
+    const { rows: usuarioRows } = await TreinoModel.buscarIdPorUsuarioId(
+      req.user!.id_usuario,
     );
     if (usuarioRows.length === 0) {
       res
@@ -36,8 +36,8 @@ export async function exerciciosDoTreino(
   try {
     const { id_aluno_treino } = req.params;
 
-    const { rows: usuarioRows } = await TreinoModel.buscarIdPorAuthId(
-      req.user!.id,
+    const { rows: usuarioRows } = await TreinoModel.buscarIdPorUsuarioId(
+      req.user!.id_usuario,
     );
     const id_usuario = usuarioRows[0]?.id;
     if (!id_usuario) {
@@ -191,7 +191,7 @@ export async function criarTreino(
       return;
     }
 
-    const { rows: uRows } = await TreinoModel.buscarIdPorAuthId(req.user!.id);
+    const { rows: uRows } = await TreinoModel.buscarIdPorUsuarioId(req.user!.id_usuario);
     const id_instrutor = uRows[0]?.id;
     if (!id_instrutor) {
       res

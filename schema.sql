@@ -1,6 +1,6 @@
 -- ============================================================
--- Impacto Gym — Schema PostgreSQL (Supabase)
--- Executar no SQL Editor do Supabase Project
+-- Impacto Gym — Schema PostgreSQL local
+-- Carregado automaticamente pelo serviço PostgreSQL do docker-compose.
 -- ============================================================
 
 --  Extensões 
@@ -12,7 +12,7 @@ CREATE TYPE status_cadastro    AS ENUM ('pendente', 'ativo', 'rejeitado', 'inati
 CREATE TYPE status_documento   AS ENUM ('pendente', 'aprovado', 'rejeitado');
 CREATE TYPE status_solicitacao AS ENUM ('aberto', 'atendido', 'cancelado');
 CREATE TYPE status_sessao      AS ENUM ('em_andamento', 'finalizado', 'abandonado');
-CREATE TYPE sexo_usuario       AS ENUM ('M', 'F', 'O');
+CREATE TYPE sexo_usuario       AS ENUM ('M', 'F', 'O', 'OUTRO', 'PREFIRO_NAO_DIZER');
 CREATE TYPE objetivo_aluno     AS ENUM ('hipertrofia','emagrecimento','condicionamento','forca','recomendacao_medica');
 CREATE TYPE nivel_aluno        AS ENUM ('iniciante','intermediario','avancado');
 CREATE TYPE grupo_muscular     AS ENUM ('Peitoral','Costas','Bracos','Pernas','Abdomen');
@@ -43,14 +43,34 @@ CREATE TYPE restricao_medica_aluno AS ENUM (
 --  usuarios 
 CREATE TABLE usuarios (
   id         BIGSERIAL          PRIMARY KEY,
-  id_auth    UUID               NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
   nome       VARCHAR(120)       NOT NULL,
   cpf        CHAR(11)           NOT NULL UNIQUE,
-  email      VARCHAR(120)       NOT NULL UNIQUE,
+  email      VARCHAR(120)       NOT NULL,
+  email_verificado BOOLEAN      NOT NULL DEFAULT false,
+  senha_hash TEXT               NOT NULL,
   sexo       sexo_usuario,
   perfil     perfil_usuario     NOT NULL,
   foto_url   TEXT,
   criado_em  TIMESTAMPTZ        NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_usuarios_email_lower ON usuarios (LOWER(email));
+
+CREATE TABLE auth_sessoes (
+  id                 UUID        PRIMARY KEY,
+  id_usuario         BIGINT      NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  refresh_token_hash CHAR(64)    NOT NULL,
+  expira_em          TIMESTAMPTZ NOT NULL,
+  criado_em          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE auth_codigos_email (
+  id_usuario   BIGINT      NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  finalidade   VARCHAR(32) NOT NULL CHECK (finalidade IN ('login_admin', 'recuperacao_senha', 'verificacao_cadastro')),
+  codigo_hash  CHAR(64)    NOT NULL,
+  expira_em    TIMESTAMPTZ NOT NULL,
+  criado_em    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (id_usuario, finalidade)
 );
 
 --  alunos 
@@ -63,6 +83,7 @@ CREATE TABLE alunos (
   deficiencia       deficiencia_aluno       NOT NULL DEFAULT 'nenhuma',
   restricao_medica  restricao_medica_aluno  NOT NULL DEFAULT 'nenhuma',
   status            status_cadastro         NOT NULL DEFAULT 'pendente',
+  prazo_envio_laudo TIMESTAMPTZ             NOT NULL DEFAULT (NOW() + INTERVAL '10 days'),
   id_instrutor      BIGINT                  REFERENCES usuarios(id) ON DELETE SET NULL,
   criado_em         TIMESTAMPTZ             NOT NULL DEFAULT NOW()
 );
@@ -77,6 +98,10 @@ CREATE TABLE documentos_comprobatorios (
   motivo_rejeicao  TEXT,
   enviado_em       TIMESTAMPTZ      NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX idx_documento_unico_em_revisao
+  ON documentos_comprobatorios (id_aluno)
+  WHERE status IN ('pendente', 'aprovado');
 
 --  exercicios 
 CREATE TABLE exercicios (
@@ -181,7 +206,6 @@ CREATE TABLE solicitacoes_auxilio (
 );
 
 --  Índices 
-CREATE INDEX idx_usuarios_id_auth       ON usuarios(id_auth);
 CREATE INDEX idx_alunos_id_usuario      ON alunos(id_usuario);
 CREATE INDEX idx_alunos_id_instrutor    ON alunos(id_instrutor);
 CREATE INDEX idx_aluno_treinos_aluno    ON aluno_treinos(id_aluno);
@@ -190,32 +214,3 @@ CREATE INDEX idx_sessoes_aluno          ON sessoes_treino(id_aluno, status);
 CREATE INDEX idx_historico_aluno        ON historico_treinos(id_aluno, criado_em DESC);
 CREATE INDEX idx_solicitacoes_status    ON solicitacoes_auxilio(status);
 CREATE INDEX idx_avisos_criado_em       ON avisos(criado_em DESC);
-
---  Row Level Security (RLS) 
-ALTER TABLE usuarios                  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE alunos                    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE documentos_comprobatorios ENABLE ROW LEVEL SECURITY;
-ALTER TABLE exercicios                ENABLE ROW LEVEL SECURITY;
-ALTER TABLE treinos                   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE treino_exercicios         ENABLE ROW LEVEL SECURITY;
-ALTER TABLE aluno_treinos             ENABLE ROW LEVEL SECURITY;
-ALTER TABLE aluno_treino_exercicios   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sessoes_treino            ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sessao_series             ENABLE ROW LEVEL SECURITY;
-ALTER TABLE historico_treinos         ENABLE ROW LEVEL SECURITY;
-ALTER TABLE avisos                    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE solicitacoes_auxilio      ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "service_role_all" ON usuarios                  FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON alunos                    FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON documentos_comprobatorios FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON exercicios                FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON treinos                   FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON treino_exercicios         FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON aluno_treinos             FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON aluno_treino_exercicios   FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON sessoes_treino            FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON sessao_series             FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON historico_treinos         FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON avisos                    FOR ALL TO service_role USING (true);
-CREATE POLICY "service_role_all" ON solicitacoes_auxilio      FOR ALL TO service_role USING (true);

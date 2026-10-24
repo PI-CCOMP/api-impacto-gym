@@ -1,10 +1,9 @@
 import pool from "../config/database";
 
-export async function buscarIdPorAuthId(authId: string) {
-  const { rows } = await pool.query(
-    "SELECT id FROM usuarios WHERE id_auth = $1",
-    [authId],
-  );
+export async function buscarIdPorUsuarioId(idUsuario: number) {
+  const { rows } = await pool.query("SELECT id FROM usuarios WHERE id = $1", [
+    idUsuario,
+  ]);
   return rows.length > 0 ? (rows[0].id as number) : null;
 }
 

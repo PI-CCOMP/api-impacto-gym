@@ -1,7 +1,7 @@
 import pool from "../config/database";
 
-export async function buscarIdPorAuthId(authId: string) {
-  return pool.query("SELECT id FROM usuarios WHERE id_auth = $1", [authId]);
+export async function buscarIdPorUsuarioId(idUsuario: number) {
+  return pool.query("SELECT id FROM usuarios WHERE id = $1", [idUsuario]);
 }
 
 export async function listarUltimos30Dias(idUsuario: number) {

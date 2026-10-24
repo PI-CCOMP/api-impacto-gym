@@ -3,10 +3,11 @@ export type Perfil = "admin" | "instrutor" | "recepcionista" | "aluno";
 
 //  Payload JWT (extraído pelo middleware de auth)
 export interface UsuarioToken {
-  id: string; // UUID do Supabase Auth (id_auth)
+  id: string; // ID do usuário no PostgreSQL
   id_usuario: number; // PK numérica da tabela usuarios
   perfil: Perfil;
-  mfa_verificado?: boolean;
+  email_verificado?: boolean;
+  session_id: string;
 }
 
 //  Enums aceitos pela API
@@ -17,8 +18,14 @@ export const PERFIS_VALIDOS: Perfil[] = [
   "aluno",
 ];
 
-export type Sexo = "M" | "F" | "O";
-export const SEXOS_VALIDOS: Sexo[] = ["M", "F", "O"];
+export type Sexo = "M" | "F" | "O" | "OUTRO" | "PREFIRO_NAO_DIZER";
+export const SEXOS_VALIDOS: Sexo[] = [
+  "M",
+  "F",
+  "O",
+  "OUTRO",
+  "PREFIRO_NAO_DIZER",
+];
 
 export type Objetivo =
   | "hipertrofia"

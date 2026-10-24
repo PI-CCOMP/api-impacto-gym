@@ -14,8 +14,7 @@ export async function criarSolicitacao(
       return;
     }
 
-    const { rows: uRows } = await SolicitacaoModel.buscarIdPorAuthId(req.user!.id);
-    const id_aluno = uRows[0]?.id;
+    const id_aluno = req.user!.id_usuario;
 
     const { rows } = await SolicitacaoModel.inserir({
       idAluno: id_aluno,
@@ -35,8 +34,7 @@ export async function minhasSolicitacoes(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { rows: uRows } = await SolicitacaoModel.buscarIdPorAuthId(req.user!.id);
-    const id_aluno = uRows[0]?.id;
+    const id_aluno = req.user!.id_usuario;
 
     const { rows } = await SolicitacaoModel.listarDoAluno(id_aluno);
     res.json({ dados: rows });
@@ -53,8 +51,7 @@ export async function cancelarSolicitacao(
 ): Promise<void> {
   try {
     const { id_solicitacao } = req.params;
-    const { rows: uRows } = await SolicitacaoModel.buscarIdPorAuthId(req.user!.id);
-    const id_aluno = uRows[0]?.id;
+    const id_aluno = req.user!.id_usuario;
 
     const { rows } = await SolicitacaoModel.cancelar(id_solicitacao, id_aluno);
     if (rows.length === 0) {
@@ -97,8 +94,7 @@ export async function atenderSolicitacao(
 ): Promise<void> {
   try {
     const { id_solicitacao } = req.params;
-    const { rows: uRows } = await SolicitacaoModel.buscarIdPorAuthId(req.user!.id);
-    const id_instrutor = uRows[0]?.id;
+    const id_instrutor = req.user!.id_usuario;
 
     // RN27: instrutor assume; evita atendimentos duplicados
     const { rows } = await SolicitacaoModel.atender(id_solicitacao, id_instrutor);

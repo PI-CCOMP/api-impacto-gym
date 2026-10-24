@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
+import path from "node:path";
 
 dotenv.config();
 
@@ -41,18 +42,12 @@ app.use(
   }),
 );
 
-// Rate limit mais estrito para login (previne brute force)
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60_000, // 15 min
-  max: 10,
-  message: {
-    erro: "Muitas tentativas de login. Tente novamente em 15 minutos.",
-    codigo: "RATE_LIMIT_LOGIN",
-  },
-});
-
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false }));
+app.use(
+  "/uploads/fotos",
+  express.static(path.resolve(process.env.UPLOAD_DIR ?? "uploads", "fotos")),
+);
 
 //  Health check (sem dados sensíveis)
 app.get("/health", (_req, res) => {
@@ -63,7 +58,6 @@ app.get("/health", (_req, res) => {
 const api = express.Router();
 
 api.use("/auth", authRoutes);
-api.use("/auth/login", loginLimiter); // aplicado especificamente na rota de login
 api.use("/cadastros", cadastroRoutes);
 api.use("/usuarios", usuarioRoutes);
 api.use("/treinos", treinoRoutes);

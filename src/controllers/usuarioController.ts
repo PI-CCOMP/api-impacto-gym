@@ -1,14 +1,25 @@
 import { Request, Response, NextFunction } from "express";
+import bcrypt from "bcryptjs";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import pool from "../config/database";
-import { supabaseAdmin } from "../config/supabase";
+import * as AuthModel from "../models/authModel";
 import * as UsuarioModel from "../models/usuarioModel";
+import { enviarCodigoVerificacaoCadastro } from "../services/emailVerification";
 import {
   validarSenha,
   validarEmail,
   validarCpf,
   nomeArquivoSeguro,
 } from "../utils/validate";
-import { PERFIS_VALIDOS, SEXOS_VALIDOS } from "../types";
+import {
+  PERFIS_VALIDOS,
+  SEXOS_VALIDOS,
+  OBJETIVOS_VALIDOS,
+  NIVEIS_VALIDOS,
+  DEFICIENCIAS_VALIDAS,
+  RESTRICOES_VALIDAS,
+} from "../types";
 
 // GET /usuarios
 export async function listarUsuarios(
@@ -45,6 +56,8 @@ export async function listarUsuarios(
         perfil: r.perfil,
         email: r.email,
         status: r.status ?? null,
+        deficiencia: r.deficiencia ?? null,
+        restricao_medica: r.restricao_medica ?? null,
         instrutor_vinculado:
           r.perfil === "aluno" && r.status === "ativo"
             ? (r.instrutor_vinculado ?? null)
@@ -66,7 +79,7 @@ export async function usuarioAtual(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { rows } = await UsuarioModel.buscarPorAuthId(req.user!.id);
+    const { rows } = await UsuarioModel.buscarPorUsuarioId(req.user!.id_usuario);
     if (rows.length === 0) {
       res
         .status(404)
@@ -140,7 +153,8 @@ export async function buscarUsuario(
     if (
       req.user!.perfil === "instrutor" &&
       r.perfil === "aluno" &&
-      r.id_instrutor !== req.user!.id
+      r.id_instrutor !== null &&
+      r.id_instrutor !== req.user!.id_usuario
     ) {
       res
         .status(403)
@@ -161,6 +175,7 @@ export async function buscarUsuario(
       foto_url: r.foto_url,
       perfil: r.perfil,
       criado_em: r.criado_em,
+      email_verificado: r.email_verificado,
       // [CORRIGIDO] id_aluno removido — usar id_usuario como identificador único
       aluno: r.nivel
         ? {
@@ -170,6 +185,7 @@ export async function buscarUsuario(
             deficiencia: r.deficiencia,
             restricao_medica: r.restricao_medica,
             status: r.status,
+            prazo_envio_laudo: r.prazo_envio_laudo,
             id_instrutor: r.id_instrutor,
           }
         : null,
@@ -211,6 +227,7 @@ export async function criarUsuario(
         .json({ erro: "E-mail inválido.", codigo: "EMAIL_INVALIDO" });
       return;
     }
+    const emailNormalizado = email.trim().toLowerCase();
     if (!validarCpf(cpf)) {
       res.status(422).json({ erro: "CPF inválido.", codigo: "CPF_INVALIDO" });
       return;
@@ -229,9 +246,39 @@ export async function criarUsuario(
       res.status(422).json({ erro: "Sexo inválido.", codigo: "ENUM_INVALIDO" });
       return;
     }
+    if (
+      perfil === "aluno" &&
+      (!aluno ||
+        !OBJETIVOS_VALIDOS.includes(aluno.objetivo) ||
+        !NIVEIS_VALIDOS.includes(aluno.nivel))
+    ) {
+      res.status(422).json({
+        erro: "Alunos precisam de objetivo e nível válidos.",
+        codigo: "DADOS_ALUNO_INVALIDOS",
+      });
+      return;
+    }
+    const deficienciaAluno = (aluno?.deficiencia || "nenhuma")
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    const restricaoAluno = (aluno?.restricao_medica || "nenhuma")
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    if (
+      perfil === "aluno" &&
+      (!DEFICIENCIAS_VALIDAS.includes(
+        deficienciaAluno as (typeof DEFICIENCIAS_VALIDAS)[number],
+      ) ||
+        !RESTRICOES_VALIDAS.includes(
+          restricaoAluno as (typeof RESTRICOES_VALIDAS)[number],
+        ))
+    ) {
+      res.status(422).json({ erro: "Restrição ou deficiência inválida.", codigo: "ENUM_INVALIDO" });
+      return;
+    }
 
     const dup = await UsuarioModel.verificarDuplicado(
-      email,
+      emailNormalizado,
       cpf.replace(/\D/g, ""),
     );
     if (dup.rows.length > 0) {
@@ -241,43 +288,51 @@ export async function criarUsuario(
       return;
     }
 
-    const { data: authData, error: authError } = await UsuarioModel.criarNoAuth(
-      email,
-      senha,
-    );
-    if (authError || !authData.user) {
-      res
-        .status(500)
-        .json({ erro: "Erro ao criar credenciais.", codigo: "ERRO_AUTH" });
-      return;
-    }
-
     await client.query("BEGIN");
 
     const { rows } = await UsuarioModel.inserirUsuario(client, {
-      authId: authData.user.id,
       nome: nomeTrimmed,
       cpf: cpf.replace(/\D/g, ""),
-      email,
+      email: emailNormalizado,
+      senhaHash: await bcrypt.hash(senha, 12),
       sexo,
       perfil,
       fotoUrl: foto_url ?? null,
     });
     const id_usuario = rows[0].id;
+    let prazoEnvioLaudo: Date | string | undefined;
 
     if (perfil === "aluno" && aluno) {
-      await UsuarioModel.inserirAluno(client, {
+      const { rows: alunoRows } = await UsuarioModel.inserirAluno(client, {
         idUsuario: id_usuario,
         objetivo: aluno.objetivo,
         nivel: aluno.nivel,
-        deficiencia: aluno.deficiencia || "nenhuma",
-        restricaoMedica: aluno.restricao_medica || "nenhuma",
-        status: "ativo",
+        deficiencia: deficienciaAluno,
+        restricaoMedica: restricaoAluno,
+        status: "pendente",
       });
+      prazoEnvioLaudo = alunoRows[0].prazo_envio_laudo;
     }
 
     await client.query("COMMIT");
-    res.status(201).json({ id_usuario, perfil });
+    try {
+      await enviarCodigoVerificacaoCadastro(id_usuario, emailNormalizado);
+    } catch {
+      res.status(503).json({
+        erro: "Usuário criado, mas não foi possível enviar o código. Solicite novo envio.",
+        codigo: "EMAIL_ENVIO_FALHOU",
+        id_usuario,
+        email_verification_required: true,
+      });
+      return;
+    }
+    res.status(201).json({
+      id_usuario,
+      perfil,
+      ...(perfil === "aluno" ? { status: "pendente" } : {}),
+      ...(prazoEnvioLaudo ? { prazo_envio_laudo: prazoEnvioLaudo } : {}),
+      email_verification_required: true,
+    });
   } catch (err) {
     await client.query("ROLLBACK");
     next(err);
@@ -321,26 +376,53 @@ export async function editarUsuario(
       return;
     }
 
-    await UsuarioModel.atualizar(id, {
+    const { rows: atualizados } = await UsuarioModel.atualizar(id, {
       nome,
-      email,
+      email: email?.trim().toLowerCase(),
       sexo,
       perfil,
       isRecepcionista,
       fotoUrl: foto_url,
     });
+    if (atualizados.length === 0) {
+      res.status(404).json({ erro: "Usuário não encontrado.", codigo: "NAO_ENCONTRADO" });
+      return;
+    }
+
+    const emailVerificationRequired =
+      Boolean(email) && !atualizados[0].email_verificado;
+    if (emailVerificationRequired) {
+      await AuthModel.revogarSessoesDoUsuario(Number(id));
+      try {
+        await enviarCodigoVerificacaoCadastro(Number(id), atualizados[0].email);
+      } catch {
+        res.status(503).json({
+          erro: "E-mail atualizado, mas não foi possível enviar o código. Solicite novo envio.",
+          codigo: "EMAIL_ENVIO_FALHOU",
+          email_verification_required: true,
+        });
+        return;
+      }
+    }
 
     if (aluno && !isRecepcionista) {
-      await UsuarioModel.atualizarAluno(id, {
+      const { rows: alunoAtualizado } = await UsuarioModel.atualizarAluno(id, {
         objetivo: aluno.objetivo,
         nivel: aluno.nivel,
         deficiencia: aluno.deficiencia,
         restricaoMedica: aluno.restricao_medica,
         idInstrutor: aluno.id_instrutor ?? null,
       });
+      if (alunoAtualizado[0]?.status === "pendente") {
+        await AuthModel.revogarSessoesDoUsuario(Number(id));
+      }
     }
 
-    res.json({ id_usuario: Number(id), atualizado: true });
+    res.json({
+      id_usuario: Number(id),
+      atualizado: true,
+      ...(emailVerificationRequired ? { email_verification_required: true } : {}),
+    });
   } catch (err) {
     next(err);
   }
@@ -356,7 +438,7 @@ export async function excluirUsuario(
   try {
     const { id } = req.params;
 
-    const { rows } = await UsuarioModel.buscarAuthIdPorId(id);
+    const { rows } = await UsuarioModel.existePorId(id);
     if (rows.length === 0) {
       res
         .status(404)
@@ -367,11 +449,6 @@ export async function excluirUsuario(
     await client.query("BEGIN");
     await UsuarioModel.excluirPorId(client, id);
     await client.query("COMMIT");
-
-    const { error } = await UsuarioModel.excluirNoAuth(rows[0].id_auth);
-    if (error) {
-      console.error("Erro ao deletar no Auth:", error);
-    }
 
     res.json({ excluido: true });
   } catch (err) {
@@ -397,7 +474,7 @@ export async function uploadFotoPerfil(
       return;
     }
 
-    const { rows } = await UsuarioModel.buscarIdPorAuthId(req.user!.id);
+    const { rows } = await UsuarioModel.buscarIdPorUsuarioId(req.user!.id_usuario);
     if (rows.length === 0) {
       res
         .status(404)
@@ -406,28 +483,13 @@ export async function uploadFotoPerfil(
     }
     const id_usuario = rows[0].id;
 
-    const bucket = process.env.STORAGE_BUCKET_FOTOS ?? "fotos";
     const nomeArquivo = nomeArquivoSeguro(req.file.originalname);
-    const caminho = `fotos/${id_usuario}/${nomeArquivo}`;
-
-    const { error } = await supabaseAdmin.storage
-      .from(bucket)
-      .upload(caminho, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: true,
-      });
-
-    if (error) {
-      res
-        .status(500)
-        .json({ erro: "Erro ao armazenar imagem.", codigo: "STORAGE_ERRO" });
-      return;
-    }
-
-    const { data: urlData } = supabaseAdmin.storage
-      .from(bucket)
-      .getPublicUrl(caminho);
-    const foto_url = urlData.publicUrl;
+    const uploadDir = path.resolve(process.env.UPLOAD_DIR ?? "uploads");
+    const pastaFotos = path.join(uploadDir, "fotos", String(id_usuario));
+    await mkdir(pastaFotos, { recursive: true });
+    await writeFile(path.join(pastaFotos, nomeArquivo), req.file.buffer);
+    const baseUrl = (process.env.API_BASE_URL ?? `http://localhost:${process.env.PORT ?? 3001}`).replace(/\/$/, "");
+    const foto_url = `${baseUrl}/uploads/fotos/${id_usuario}/${nomeArquivo}`;
 
     await UsuarioModel.atualizarFoto(foto_url, id_usuario);
     res.json({ foto_url });

@@ -1,5 +1,4 @@
 import pool from "../config/database";
-import { supabaseAdmin } from "../config/supabase";
 
 export async function listar(filtros: {
   perfil: string;
@@ -11,8 +10,8 @@ export async function listar(filtros: {
 }) {
   return pool.query(
     `SELECT
-       u.id AS id_usuario, u.nome, u.cpf, u.perfil, u.email,
-       a.status,
+      u.id AS id_usuario, u.nome, u.cpf, u.perfil, u.email,
+      a.status, a.deficiencia, a.restricao_medica,
        ui.nome AS instrutor_vinculado,
        COUNT(*) OVER() AS total
      FROM usuarios u
@@ -20,7 +19,7 @@ export async function listar(filtros: {
      LEFT JOIN usuarios ui ON ui.id = a.id_instrutor
      WHERE ($1 = '' OR u.perfil = $1::perfil_usuario)
        AND ($2 = '' OR u.nome ILIKE '%' || $2 || '%' OR u.cpf ILIKE '%' || $2 || '%')
-       AND ($3 = false OR a.id_instrutor = $4)
+      AND ($3 = false OR a.id_instrutor = $4 OR (a.id_instrutor IS NULL AND u.perfil = 'aluno'))
      ORDER BY u.nome ASC
      LIMIT $5 OFFSET $6`,
     [
@@ -34,19 +33,20 @@ export async function listar(filtros: {
   );
 }
 
-export async function buscarPorAuthId(authId: string) {
+export async function buscarPorUsuarioId(idUsuario: number) {
   return pool.query(
     `SELECT u.id AS id_usuario, u.nome, u.email, u.foto_url, u.perfil
-     FROM usuarios u WHERE u.id_auth = $1`,
-    [authId],
+    FROM usuarios u WHERE u.id = $1`,
+      [idUsuario],
   );
 }
 
-export async function buscarPorId(id: string) {
+export async function existePorId(id: string) {
   return pool.query(
     `SELECT
        u.id AS id_usuario, u.nome, u.cpf, u.email, u.sexo, u.foto_url, u.perfil, u.criado_em,
-       a.nivel, a.objetivo, a.deficiencia, a.restricao_medica, a.status, a.id_instrutor
+      a.nivel, a.objetivo, a.deficiencia, a.restricao_medica, a.status,
+      a.prazo_envio_laudo, a.id_instrutor, u.email_verificado
      FROM usuarios u
      LEFT JOIN alunos a ON a.id_usuario = u.id
      WHERE u.id = $1`,
@@ -74,41 +74,33 @@ export async function verificarInstrutorDoAluno(
 }
 
 export async function verificarDuplicado(email: string, cpf: string) {
-  return pool.query("SELECT 1 FROM usuarios WHERE email = $1 OR cpf = $2", [
-    email,
-    cpf,
-  ]);
-}
-
-export async function criarNoAuth(email: string, senha: string) {
-  return supabaseAdmin.auth.admin.createUser({
-    email,
-    password: senha,
-    email_confirm: true,
-  });
+  return pool.query(
+    "SELECT 1 FROM usuarios WHERE LOWER(email) = LOWER($1) OR cpf = $2",
+    [email, cpf],
+  );
 }
 
 export async function inserirUsuario(
   client: any,
   dados: {
-    authId: string;
     nome: string;
     cpf: string;
     email: string;
+    senhaHash: string;
     sexo: string;
     perfil: string;
     fotoUrl: string | null;
   },
 ) {
   return client.query(
-    `INSERT INTO usuarios (id_auth, nome, cpf, email, sexo, perfil, foto_url)
+    `INSERT INTO usuarios (nome, cpf, email, senha_hash, sexo, perfil, foto_url)
      VALUES ($1, $2, $3, $4, $5, $6::perfil_usuario, $7)
      RETURNING id`,
     [
-      dados.authId,
       dados.nome,
       dados.cpf,
       dados.email,
+      dados.senhaHash,
       dados.sexo,
       dados.perfil,
       dados.fotoUrl,
@@ -130,7 +122,8 @@ export async function inserirAluno(
   return client.query(
     // [CORRIGIDO] casts explícitos para os novos enums deficiencia_aluno e restricao_medica_aluno
     `INSERT INTO alunos (id_usuario, objetivo, nivel, deficiencia, restricao_medica, status)
-     VALUES ($1, $2::objetivo_aluno, $3::nivel_aluno, $4::deficiencia_aluno, $5::restricao_medica_aluno, $6::status_cadastro)`,
+    VALUES ($1, $2::objetivo_aluno, $3::nivel_aluno, $4::deficiencia_aluno, $5::restricao_medica_aluno, $6::status_cadastro)
+    RETURNING id_usuario, prazo_envio_laudo`,
     [
       dados.idUsuario,
       dados.objetivo,
@@ -158,10 +151,15 @@ export async function atualizar(
     `UPDATE usuarios SET
        nome = COALESCE($1, nome),
        email = COALESCE($2, email),
+       email_verificado = CASE
+         WHEN $2 IS NOT NULL AND LOWER($2) <> LOWER(email) THEN false
+         ELSE email_verificado
+       END,
        sexo = COALESCE($3::sexo_usuario, sexo),
        perfil = CASE WHEN $4 IS NOT NULL AND $5::boolean = false THEN $4::perfil_usuario ELSE perfil END,
        foto_url = COALESCE($6, foto_url)
-     WHERE id = $7`,
+    WHERE id = $7
+    RETURNING id, email, email_verificado`,
     [
       dados.nome ?? null,
       dados.email ?? null,
@@ -191,8 +189,15 @@ export async function atualizarAluno(
        nivel = COALESCE($2::nivel_aluno, nivel),
        deficiencia = COALESCE($3::deficiencia_aluno, deficiencia),
        restricao_medica = COALESCE($4::restricao_medica_aluno, restricao_medica),
+       status = CASE
+         WHEN (deficiencia = 'nenhuma' AND COALESCE($3::deficiencia_aluno, deficiencia) <> 'nenhuma')
+           OR (restricao_medica = 'nenhuma' AND COALESCE($4::restricao_medica_aluno, restricao_medica) <> 'nenhuma')
+         THEN 'pendente'::status_cadastro
+         ELSE status
+       END,
        id_instrutor = $5
-     WHERE id_usuario = $6`,
+     WHERE id_usuario = $6
+     RETURNING status`,
     [
       dados.objetivo ?? null,
       dados.nivel ?? null,
@@ -204,20 +209,16 @@ export async function atualizarAluno(
   );
 }
 
-export async function buscarAuthIdPorId(id: string) {
-  return pool.query("SELECT id_auth FROM usuarios WHERE id = $1", [id]);
+export async function buscarPorId(id: string) {
+  return pool.query("SELECT id FROM usuarios WHERE id = $1", [id]);
 }
 
 export async function excluirPorId(client: any, id: string) {
   return client.query("DELETE FROM usuarios WHERE id = $1", [id]);
 }
 
-export async function excluirNoAuth(authId: string) {
-  return supabaseAdmin.auth.admin.deleteUser(authId);
-}
-
-export async function buscarIdPorAuthId(authId: string) {
-  return pool.query("SELECT id FROM usuarios WHERE id_auth = $1", [authId]);
+export async function buscarIdPorUsuarioId(idUsuario: number) {
+  return pool.query("SELECT id FROM usuarios WHERE id = $1", [idUsuario]);
 }
 
 export async function atualizarFoto(fotoUrl: string, idUsuario: number) {

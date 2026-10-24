@@ -69,10 +69,40 @@ A API atua como camada principal de processamento e persistência dos dados.
 - **Node.js**
 - **TypeScript**
 - **Express.js**
-- **Supabase**
-- **JWT Authentication**
+- **PostgreSQL** (Docker local)
+- **JWT + bcrypt** (autenticação própria)
+- **Azure Communication Services** (e-mail)
 - **Multer**
 - **Middlewares personalizados**
+
+## Executar localmente
+
+1. Inicie o PostgreSQL:
+
+```powershell
+docker compose up -d
+```
+
+2. Instale as dependências:
+
+```powershell
+npm install
+```
+
+3. Configure o `.env` com `DATABASE_URL`, `JWT_SECRET` (aleatório, com pelo menos 32 caracteres), as variáveis `ADMIN_*` para provisionar o primeiro administrador, `AZURE_COMMUNICATION_CONNECTION_STRING` e `AZURE_COMMUNICATION_SENDER_EMAIL` para envio de e-mail.
+
+4. Crie o primeiro administrador e inicie a API:
+
+```powershell
+npm run seed:admin
+npm run dev
+```
+
+A API fica em `http://localhost:3001`. O PostgreSQL local usa um volume Docker persistente; `schema.sql` é executado na primeira inicialização de um volume vazio.
+
+O login de administrador ocorre em duas etapas. `POST /auth/login` valida e-mail e senha e envia um código via Azure Communication Services; depois, `POST /auth/login/verificar-email` recebe `{ "email": "...", "codigo": "123456" }` e só então retorna os tokens. Os demais perfis continuam recebendo os tokens após o login. Para que o fechamento da página encerre a sessão do navegador, o frontend deve manter os tokens em `sessionStorage`, não em `localStorage`; o backend revoga a sessão no logout e aceita refresh por até sete dias.
+
+Arquivos de perfil são salvos em `UPLOAD_DIR` e servidos pela API. Laudos médicos ficam em armazenamento local privado e não são expostos como arquivos estáticos. No Azure App Service, configure um caminho persistente para `UPLOAD_DIR`.
 
 ---
 
@@ -80,9 +110,9 @@ A API atua como camada principal de processamento e persistência dos dados.
 
 ```bash
 src/
-│── config/              # Configurações do banco e Supabase
+│── config/              # Configurações do banco e JWT
 │   ├── database.ts
-│   └── supabase.ts
+│   └── tokens.ts
 │
 │── controllers/         # Regras de negócio
 │   ├── authController.ts
@@ -144,7 +174,19 @@ Responsável pela interface do aluno, instrutor e recepção.
 | Método | Endpoint |
 |--------|-----------|
 | POST | `/auth/login` |
-| POST | `/auth/register` |
+| POST | `/auth/login/verificar-email` |
+| POST | `/auth/email/verificar` |
+| POST | `/auth/email/reenviar-verificacao` |
+| POST | `/auth/email/solicitar-upload-laudo` |
+| POST | `/cadastros` |
+| POST | `/cadastros/:id_aluno/documento` |
+| GET | `/cadastros/:id_aluno/documentos/:id_documento` |
+| PATCH | `/cadastros/:id_aluno/documentos/:id_documento/aprovar` |
+| PATCH | `/cadastros/:id_aluno/documentos/:id_documento/rejeitar` |
+
+No cadastro público, `/cadastros` envia um código ACS e retorna `email_verification_required`. Confirme com `POST /auth/email/verificar`, enviando `{ "email": "...", "codigo": "123456" }`. Para alunos pendentes com restrição/deficiência, a confirmação retorna `cadastro_token`, válido por 30 minutos e restrito ao envio do próprio laudo. Caso expire, `POST /auth/email/solicitar-upload-laudo` recebe e-mail/senha e emite outro token. O aluno pode enviar o documento após o cadastro; o prazo de 10 dias é informado, mas não impede envio tardio. O acesso só é liberado após o e-mail confirmado, laudo aprovado quando exigido e cadastro aprovado.
+
+Admin e assistente administrativo aprovam/rejeitam documentos. A rejeição exige `motivo_rejeicao` e tenta notificar o aluno por e-mail. A aprovação do cadastro não aprova automaticamente o laudo.
 
 ### 👥 Usuários
 
