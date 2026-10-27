@@ -32,7 +32,7 @@ app.use(cors({ origin: allowedOrigin, credentials: true }));
 app.use(
   rateLimit({
     windowMs: 60_000,
-    max: 100,
+    max: 1000000,
     standardHeaders: true,
     legacyHeaders: false,
     message: {

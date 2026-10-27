@@ -26,10 +26,22 @@ function getImpactoGymLogoBase64(): string {
   return impactoGymLogoBase64;
 }
 
+// Usar apenas em DEV
+const emailDesabilitado =
+  process.env.NODE_ENV !== "production" && process.env.DISABLE_EMAIL === "true";
+
 export async function enviarEmail(
   destinatario: string,
   template: EmailTemplate,
 ): Promise<void> {
+  // usar apenas em DEV
+  if (emailDesabilitado) {
+    console.log(
+      `\n[EMAIL DEV] Para: ${destinatario}\nAssunto: ${template.subject}\n${template.plainText}\n`,
+    );
+    return;
+  }
+
   const connectionString = process.env.AZURE_COMMUNICATION_CONNECTION_STRING;
   const remetente = process.env.AZURE_COMMUNICATION_SENDER_EMAIL;
   if (!connectionString || !remetente) {
