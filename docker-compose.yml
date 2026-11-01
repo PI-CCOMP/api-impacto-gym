@@ -17,11 +17,34 @@ services:
       - ./migrations/003_document_unique.sql:/docker-entrypoint-initdb.d/004-document-unique.sql:ro
       - ./migrations/004_unique_active_session.sql:/docker-entrypoint-initdb.d/005-unique-active-session.sql:ro
       - ./migrations/005_email_code_attempts.sql:/docker-entrypoint-initdb.d/006-email-code-attempts.sql:ro
+      - ./migrations/006_medical_lists_and_pending_email.sql:/docker-entrypoint-initdb.d/007-medical-lists-and-pending-email.sql:ro
+      - ./migrations/007_medical_review_private_photos.sql:/docker-entrypoint-initdb.d/008-medical-review-private-photos.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U impacto_gym -d impacto_gym"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  api:
+    profiles: ["api"]
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://impacto_gym:impacto_gym_local@postgres:5432/impacto_gym
+      PORT: 3001
+      UPLOAD_DIR: /app/uploads
+      API_BASE_URL: http://localhost:3001
+      FILE_STORAGE_PROVIDER: ${FILE_STORAGE_PROVIDER:-local}
+    ports:
+      - "3001:3001"
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  uploads_data:

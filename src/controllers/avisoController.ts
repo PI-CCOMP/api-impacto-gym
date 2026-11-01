@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import * as AvisoModel from "../models/avisoModel";
+import { urlFotoPerfil } from "../services/photoStorage";
 
 // GET /avisos (aluno)
 export async function listarAvisosAluno(
@@ -15,7 +16,10 @@ export async function listarAvisosAluno(
         titulo: r.titulo,
         mensagem: r.mensagem,
         publicado_em: r.publicado_em,
-        autor: { nome: r.autor_nome, foto_url: r.autor_foto_url },
+        autor: {
+          nome: r.autor_nome,
+          foto_url: urlFotoPerfil(r.autor_id, r.autor_foto_url),
+        },
       })),
     });
   } catch (err) {
@@ -37,7 +41,10 @@ export async function listarAvisosDashboard(
         titulo: r.titulo,
         mensagem: r.mensagem,
         publicado_em: r.publicado_em,
-        autor: { nome: r.autor_nome, foto_url: r.autor_foto_url },
+        autor: {
+          nome: r.autor_nome,
+          foto_url: urlFotoPerfil(r.autor_id, r.autor_foto_url),
+        },
       })),
     });
   } catch (err) {

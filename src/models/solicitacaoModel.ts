@@ -51,7 +51,7 @@ export async function listarAbertas() {
   return pool.query(
     `SELECT
        s.id AS id_solicitacao,
-       ua.nome AS aluno_nome, ua.foto_url AS aluno_foto_url,
+       ua.id AS aluno_id, ua.nome AS aluno_nome, ua.foto_url AS aluno_foto_url,
        e.nome AS nome_exercicio, s.status, s.criado_em AS solicitado_em
      FROM solicitacoes_auxilio s
      JOIN usuarios ua ON ua.id = s.id_aluno

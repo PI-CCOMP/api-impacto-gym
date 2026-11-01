@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import pool from "../config/database";
 import * as CadastroModel from "../models/cadastroModel";
@@ -20,6 +20,7 @@ import {
   DEFICIENCIAS_VALIDAS,
   RESTRICOES_VALIDAS,
 } from "../types";
+import { listaTemValor, normalizarListaEnum } from "../utils/enumList";
 
 // POST /cadastros
 export async function cadastrarAluno(
@@ -93,21 +94,25 @@ export async function cadastrarAluno(
       return;
     }
 
-    const deficienciaVal = (deficiencia || "nenhuma")
-      .toLowerCase()
-      .replace(/\s+/g, "_") as any;
-    const restricaoVal = (restricao_medica || "nenhuma")
-      .toLowerCase()
-      .replace(/\s+/g, "_") as any;
+    const deficienciaVal = normalizarListaEnum(
+      deficiencia,
+      DEFICIENCIAS_VALIDAS,
+      "nenhuma",
+    );
+    const restricaoVal = normalizarListaEnum(
+      restricao_medica,
+      RESTRICOES_VALIDAS,
+      "nenhuma",
+    );
 
-    if (!DEFICIENCIAS_VALIDAS.includes(deficienciaVal)) {
+    if (!deficienciaVal) {
       res.status(422).json({
         erro: "Valor de deficiência inválido.",
         codigo: "ENUM_INVALIDO",
       });
       return;
     }
-    if (!RESTRICOES_VALIDAS.includes(restricaoVal)) {
+    if (!restricaoVal) {
       res.status(422).json({
         erro: "Valor de restrição médica inválido.",
         codigo: "ENUM_INVALIDO",
@@ -126,9 +131,9 @@ export async function cadastrarAluno(
       return;
     }
 
-    // RN12: status pendente se tiver restrição médica ou deficiência
     const temRestricao =
-      deficienciaVal !== "nenhuma" || restricaoVal !== "nenhuma";
+      listaTemValor(deficienciaVal, "nenhuma") ||
+      listaTemValor(restricaoVal, "nenhuma");
     const status = "pendente";
 
     await client.query("BEGIN");
@@ -209,10 +214,10 @@ export async function uploadDocumento(
       return;
     }
 
-    const { rows } = await CadastroModel.buscarAlunoPendente(id_aluno);
+    const { rows } = await CadastroModel.buscarAlunoParaUpload(id_aluno);
     if (rows.length === 0) {
       res.status(404).json({
-        erro: "Aluno pendente não encontrado.",
+        erro: "Aluno ou revisão médica não encontrados.",
         codigo: "NAO_ENCONTRADO",
       });
       return;
@@ -226,9 +231,12 @@ export async function uploadDocumento(
       });
       return;
     }
-    if (rows[0].tem_documento) {
+    if (
+      rows[0].tem_documento_pendente ||
+      (rows[0].status === "pendente" && rows[0].tem_documento_aprovado)
+    ) {
       res.status(409).json({
-        erro: "Já existe um laudo aguardando análise ou aprovado.",
+        erro: "Já existe um laudo aguardando análise ou este cadastro já tem laudo aprovado.",
         codigo: "DOCUMENTO_JA_ENVIADO",
       });
       return;
@@ -237,19 +245,47 @@ export async function uploadDocumento(
     const nomeArquivo = nomeArquivoSeguro(req.file.originalname);
     const pastaLaudos = path.resolve(process.env.UPLOAD_DIR ?? "uploads", "laudos", id_aluno);
     const caminho = path.join("laudos", id_aluno, nomeArquivo);
+    const arquivoDestino = path.join(pastaLaudos, nomeArquivo);
     await mkdir(pastaLaudos, { recursive: true });
-    await writeFile(path.join(pastaLaudos, nomeArquivo), req.file.buffer, { flag: "wx" });
+    await writeFile(arquivoDestino, req.file.buffer, { flag: "wx" });
 
-    const { rows: docRows } = await CadastroModel.inserirDocumento(
-      id_aluno,
-      caminho,
-      nomeArquivo,
-    );
-    res.status(201).json({ id_documento: docRows[0].id, status: "pendente" });
+    let idDocumento: number | string;
+    try {
+      const resultado = await CadastroModel.inserirDocumento(
+        id_aluno,
+        caminho,
+        nomeArquivo,
+      );
+      if (resultado.rows.length === 0) {
+        await rm(arquivoDestino, { force: true });
+        if (resultado.erro === "SEM_RESTRICAO") {
+          res.status(422).json({
+            erro: "Aluno não declarou restrição médica ou deficiência.",
+            codigo: "SEM_RESTRICAO",
+          });
+        } else if (resultado.erro === "DOCUMENTO_JA_ENVIADO") {
+          res.status(409).json({
+            erro: "Já existe um laudo aguardando análise ou este cadastro já tem laudo aprovado.",
+            codigo: "DOCUMENTO_JA_ENVIADO",
+          });
+        } else {
+          res.status(403).json({
+            erro: "Não há laudo pendente para esta conta.",
+            codigo: "UPLOAD_NAO_DISPONIVEL",
+          });
+        }
+        return;
+      }
+      idDocumento = resultado.rows[0].id;
+    } catch (error) {
+      await rm(arquivoDestino, { force: true });
+      throw error;
+    }
+    res.status(201).json({ id_documento: idDocumento, status: "pendente" });
   } catch (err) {
     if ((err as { code?: string })?.code === "23505") {
       res.status(409).json({
-        erro: "Já existe um laudo aguardando análise ou aprovado.",
+        erro: "Já existe um laudo aguardando análise.",
         codigo: "DOCUMENTO_JA_ENVIADO",
       });
       return;
@@ -266,6 +302,10 @@ export async function listarCadastros(
 ): Promise<void> {
   try {
     const status = (req.query.status as string) || "pendente";
+    if (!["pendente", "revisao_medica", "ativo", "rejeitado", "inativo"].includes(status)) {
+      res.status(422).json({ erro: "Status de cadastro inválido.", codigo: "ENUM_INVALIDO" });
+      return;
+    }
     const busca = (req.query.busca as string) || "";
     const pagina = Math.max(1, parseInt(req.query.pagina as string) || 1);
     const porPagina = Math.min(
@@ -302,7 +342,19 @@ export async function listarCadastros(
         deficiencia: r.deficiencia,
         restricao_medica: r.restricao_medica,
         prazo_envio_laudo: r.prazo_envio_laudo,
-        prazo_laudo_expirado: new Date(r.prazo_envio_laudo).getTime() < Date.now(),
+        revisao_medica_pendente: r.revisao_medica_pendente,
+        prazo_revisao_medica: r.prazo_revisao_medica,
+        prazo_laudo_expirado:
+          (r.revisao_medica_pendente &&
+            r.prazo_revisao_medica &&
+            new Date(r.prazo_revisao_medica).getTime() <= Date.now()) ||
+          (r.status === "pendente" &&
+            (r.deficiencia.some((valor: string) => valor !== "nenhuma") ||
+              r.restricao_medica.some((valor: string) => valor !== "nenhuma")) &&
+            (!r.id_documento ||
+              r.status_documento === "rejeitado" ||
+              r.status_documento === "cancelado") &&
+            new Date(r.prazo_envio_laudo).getTime() <= Date.now()),
         ...(isAdmin ? { cpf: r.cpf, email: r.email } : {}),
       })),
       total,
@@ -345,17 +397,6 @@ export async function aprovarCadastro(
       return;
     }
 
-    if (
-      req.user!.perfil === "instrutor" &&
-      aluno.id_instrutor !== req.user!.id_usuario
-    ) {
-      res.status(403).json({
-        erro: "Instrutores só podem aprovar alunos vinculados à sua conta.",
-        codigo: "SEM_PERMISSAO",
-      });
-      return;
-    }
-
     // Se tem restrição, exige documento PDF aprovado (ou pendente)
     if (aluno.tem_restricao && !aluno.tem_documento_aprovado) {
       res.status(422).json({
@@ -392,14 +433,6 @@ export async function verDocumento(
       res.status(404).json({ erro: "Documento não encontrado.", codigo: "NAO_ENCONTRADO" });
       return;
     }
-    if (
-      req.user!.perfil === "instrutor" &&
-      rows[0].id_instrutor !== req.user!.id_usuario
-    ) {
-      res.status(403).json({ erro: "Acesso não autorizado.", codigo: "SEM_PERMISSAO" });
-      return;
-    }
-
     const pastaUploads = path.resolve(process.env.UPLOAD_DIR ?? "uploads");
     const arquivo = path.resolve(pastaUploads, rows[0].caminho_arquivo);
     if (!arquivo.startsWith(`${pastaUploads}${path.sep}`)) {
@@ -462,7 +495,10 @@ export async function rejeitarDocumento(
     try {
       await enviarEmail(
         documento[0].email,
-        laudoRejeitadoEmail(motivo_rejeicao.trim()),
+        laudoRejeitadoEmail(motivo_rejeicao.trim(), {
+          pendente: documento[0].revisao_medica_pendente,
+          prazo: documento[0].prazo_revisao_medica,
+        }),
       );
     } catch {
       notificacaoEnviada = false;

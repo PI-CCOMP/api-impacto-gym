@@ -9,17 +9,26 @@ export async function buscarUsuarioPorEmail(email: string) {
     perfil: string;
     senha_hash: string;
     email_verificado: boolean;
-        tem_restricao: boolean | null;
+    tem_restricao: boolean | null;
     tem_documento: boolean;
+    tem_documento_pendente: boolean;
+    revisao_medica_pendente: boolean | null;
+    prazo_revisao_medica: Date | null;
     status: string | null;
   }>(
     `SELECT u.id, u.nome, u.email, u.perfil, u.senha_hash,
           u.email_verificado, a.status,
-            (a.deficiencia <> 'nenhuma' OR a.restricao_medica <> 'nenhuma') AS tem_restricao,
+            (cardinality(array_remove(a.deficiencia, 'nenhuma')) > 0
+              OR cardinality(array_remove(a.restricao_medica, 'nenhuma')) > 0) AS tem_restricao,
             EXISTS (
               SELECT 1 FROM documentos_comprobatorios d
               WHERE d.id_aluno = u.id AND d.status IN ('pendente', 'aprovado')
-            ) AS tem_documento
+            ) AS tem_documento,
+            EXISTS (
+              SELECT 1 FROM documentos_comprobatorios d
+              WHERE d.id_aluno = u.id AND d.status = 'pendente'
+            ) AS tem_documento_pendente,
+            a.revisao_medica_pendente, a.prazo_revisao_medica
      FROM usuarios u
      LEFT JOIN alunos a ON a.id_usuario = u.id
      WHERE LOWER(u.email) = LOWER($1)`,
@@ -35,8 +44,14 @@ export async function buscarUsuarioPorId(id: number) {
     perfil: string;
     senha_hash: string;
     email_verificado: boolean;
+    status: string | null;
+    revisao_medica_pendente: boolean | null;
+    prazo_revisao_medica: Date | null;
   }>(
-    "SELECT id, email, perfil, senha_hash, email_verificado FROM usuarios WHERE id = $1",
+    `SELECT u.id, u.email, u.perfil, u.senha_hash, u.email_verificado, a.status,
+            a.revisao_medica_pendente, a.prazo_revisao_medica
+     FROM usuarios u LEFT JOIN alunos a ON a.id_usuario = u.id
+     WHERE u.id = $1`,
     [id],
   );
   return rows[0] ?? null;
@@ -46,20 +61,25 @@ export async function buscarUsuarioParaVerificacao(email: string) {
   const { rows } = await pool.query<{
     id: number;
     email: string;
+    email_pendente: string | null;
     email_verificado: boolean;
     perfil: string;
     status: string | null;
     tem_restricao: boolean | null;
     tem_documento: boolean;
+    revisao_medica_pendente: boolean | null;
+    prazo_revisao_medica: Date | null;
   }>(
-    `SELECT u.id, u.email, u.email_verificado, u.perfil, a.status,
-            (a.deficiencia <> 'nenhuma' OR a.restricao_medica <> 'nenhuma') AS tem_restricao,
+    `SELECT u.id, u.email, u.email_pendente, u.email_verificado, u.perfil, a.status,
+            (cardinality(array_remove(a.deficiencia, 'nenhuma')) > 0
+              OR cardinality(array_remove(a.restricao_medica, 'nenhuma')) > 0) AS tem_restricao,
             EXISTS (
               SELECT 1 FROM documentos_comprobatorios d
               WHERE d.id_aluno = u.id AND d.status IN ('pendente', 'aprovado')
-            ) AS tem_documento
+            ) AS tem_documento,
+            a.revisao_medica_pendente, a.prazo_revisao_medica
      FROM usuarios u LEFT JOIN alunos a ON a.id_usuario = u.id
-     WHERE LOWER(u.email) = LOWER($1)`,
+     WHERE LOWER(u.email) = LOWER($1) OR LOWER(u.email_pendente) = LOWER($1)`,
     [email],
   );
   return rows[0] ?? null;
@@ -87,10 +107,24 @@ export async function verificarEmailComCodigo(
 
 export async function buscarEmailExistente(email: string) {
   const { rows } = await pool.query(
-    "SELECT 1 FROM usuarios WHERE LOWER(email) = LOWER($1)",
+    `SELECT 1 FROM usuarios
+     WHERE LOWER(email) = LOWER($1) OR LOWER(email_pendente) = LOWER($1)`,
     [email],
   );
   return rows.length > 0;
+}
+
+export async function emailDisponivelParaUsuario(
+  email: string,
+  idUsuario: number,
+) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM usuarios
+     WHERE (LOWER(email) = LOWER($1) OR LOWER(email_pendente) = LOWER($1))
+       AND id <> $2`,
+    [email, idUsuario],
+  );
+  return rows.length === 0;
 }
 
 export async function criarSessao(
@@ -138,7 +172,12 @@ export async function revogarSessoesDoUsuario(idUsuario: number) {
 
 export async function salvarCodigoEmail(
   idUsuario: number,
-  finalidade: "login_admin" | "recuperacao_senha" | "verificacao_cadastro",
+  finalidade:
+    | "login_admin"
+    | "recuperacao_senha"
+    | "verificacao_cadastro"
+    | "alteracao_email"
+    | "convite_conta",
   codigoHash: string,
 ) {
   const { rows } = await pool.query<{ id_usuario: number }>(
@@ -157,7 +196,12 @@ export async function salvarCodigoEmail(
 
 export async function consumirCodigoEmail(
   idUsuario: number,
-  finalidade: "login_admin" | "recuperacao_senha" | "verificacao_cadastro",
+  finalidade:
+    | "login_admin"
+    | "recuperacao_senha"
+    | "verificacao_cadastro"
+    | "alteracao_email"
+    | "convite_conta",
   codigoHash: string,
 ) {
   const client = await pool.connect();
@@ -207,26 +251,114 @@ export async function consumirCodigoEmail(
   }
 }
 
-export async function atualizarSenha(idUsuario: number, senhaHash: string) {
-  return pool.query("UPDATE usuarios SET senha_hash = $1 WHERE id = $2", [
-    senhaHash,
-    idUsuario,
-  ]);
+export async function atualizarSenha(
+  idUsuario: number,
+  senhaHash: string,
+  verificarEmail = false,
+) {
+  return pool.query(
+    `UPDATE usuarios SET senha_hash = $1,
+       email_verificado = email_verificado OR $3
+     WHERE id = $2`,
+    [senhaHash, idUsuario, verificarEmail],
+  );
 }
 
-export async function atualizarEmail(idUsuario: number, novoEmail: string) {
-  return pool.query(
-    `WITH usuario_atualizado AS (
-       UPDATE usuarios SET email = $1, email_verificado = false
+export async function solicitarAlteracaoEmail(
+  idUsuario: number,
+  novoEmail: string,
+) {
+  const { rows } = await pool.query<{ id: number }>(
+    `WITH alteracao AS (
+       UPDATE usuarios
+       SET email_pendente = $1
        WHERE id = $2
-       RETURNING id, email
-     ), codigos_removidos AS (
+         AND email_pendente IS DISTINCT FROM $1
+         AND NOT EXISTS (
+           SELECT 1 FROM usuarios u
+           WHERE (LOWER(u.email) = LOWER($1) OR LOWER(u.email_pendente) = LOWER($1))
+             AND u.id <> $2
+         )
+       RETURNING id
+     ), codigos_antigos AS (
        DELETE FROM auth_codigos_email c
-       USING usuario_atualizado u
-       WHERE c.id_usuario = u.id
+       USING alteracao a
+       WHERE c.id_usuario = a.id AND c.finalidade = 'alteracao_email'
        RETURNING c.id_usuario
      )
-     SELECT id, email FROM usuario_atualizado`,
+     SELECT id FROM alteracao
+     UNION
+     SELECT id FROM usuarios
+     WHERE id = $2 AND LOWER(email_pendente) = LOWER($1)`,
     [novoEmail, idUsuario],
   );
+  return rows.length > 0;
+}
+
+export async function confirmarAlteracaoEmail(
+  idUsuario: number,
+  codigoHash: string,
+  emailPendente: string,
+) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: codigos } = await client.query<{
+      codigo_hash: string;
+      tentativas: number;
+    }>(
+      `SELECT c.codigo_hash, c.tentativas
+       FROM auth_codigos_email c
+       JOIN usuarios u ON u.id = c.id_usuario
+       WHERE c.id_usuario = $1 AND c.finalidade = 'alteracao_email'
+         AND LOWER(u.email_pendente) = LOWER($2) AND c.expira_em > NOW()
+       FOR UPDATE`,
+      [idUsuario, emailPendente],
+    );
+    const codigo = codigos[0];
+    if (!codigo || codigo.tentativas >= 5) {
+      await client.query("COMMIT");
+      return false;
+    }
+
+    const esperado = Buffer.from(codigo.codigo_hash, "hex");
+    const recebido = Buffer.from(codigoHash, "hex");
+    const valido =
+      esperado.length === recebido.length && timingSafeEqual(esperado, recebido);
+    if (!valido) {
+      await client.query(
+        `UPDATE auth_codigos_email SET tentativas = tentativas + 1
+         WHERE id_usuario = $1 AND finalidade = 'alteracao_email'`,
+        [idUsuario],
+      );
+      await client.query("COMMIT");
+      return false;
+    }
+
+    const { rows: atualizados } = await client.query(
+      `UPDATE usuarios SET email = email_pendente, email_pendente = NULL,
+         email_verificado = true
+       WHERE id = $1 AND LOWER(email_pendente) = LOWER($2)
+       RETURNING id`,
+      [idUsuario, emailPendente],
+    );
+    if (atualizados.length === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await client.query(
+      "DELETE FROM auth_codigos_email WHERE id_usuario = $1",
+      [idUsuario],
+    );
+    await client.query("DELETE FROM auth_sessoes WHERE id_usuario = $1", [
+      idUsuario,
+    ]);
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }

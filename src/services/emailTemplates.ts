@@ -105,12 +105,23 @@ export function cadastroEmail(codigo: string): EmailTemplate {
   );
 }
 
+export function conviteContaEmail(nome: string, codigo: string): EmailTemplate {
+  return codeTemplate(
+    "Sua conta foi criada | Impacto Gym",
+    "Use o código para definir a senha da sua conta Impacto Gym.",
+    "Defina sua senha",
+    `Olá, ${nome}! A Impacto Gym criou uma conta para você. Use o código abaixo para definir sua senha.`,
+    codigo,
+    "O código expira em 10 minutos e só pode ser usado uma vez. Se expirar, use “Esqueci minha senha” com este e-mail.",
+  );
+}
+
 export function loginAdminEmail(codigo: string): EmailTemplate {
   return codeTemplate(
     "Confirme seu acesso | Impacto Gym",
-    "Código de segurança solicitado para entrar na área administrativa.",
+    "Código de segurança solicitado para entrar na sua conta da equipe.",
     "Confirmação de acesso",
-    "Foi solicitada uma entrada na área administrativa da Impacto Gym usando sua conta.",
+    "Foi solicitada uma entrada na sua conta da equipe Impacto Gym.",
     codigo,
     "O código expira em 10 minutos e só pode ser usado uma vez. Se não foi você, ignore esta mensagem e altere sua senha.",
   );
@@ -127,20 +138,88 @@ export function recuperacaoSenhaEmail(codigo: string): EmailTemplate {
   );
 }
 
-export function laudoRejeitadoEmail(motivo: string): EmailTemplate {
+export function alteracaoEmail(codigo: string): EmailTemplate {
+  return codeTemplate(
+    "Confirme seu novo e-mail | Impacto Gym",
+    "Use o código para confirmar a alteração do e-mail da sua conta.",
+    "Confirme seu novo e-mail",
+    "Recebemos uma solicitação para alterar o e-mail da sua conta Impacto Gym.",
+    codigo,
+    "O código expira em 10 minutos. Seu e-mail atual continua válido até a confirmação deste novo endereço.",
+  );
+}
+
+export function laudoRejeitadoEmail(
+  motivo: string,
+  revisaoMedica?: { pendente: boolean; prazo: Date | string | null },
+): EmailTemplate {
   const safeMotivo = escapeHtml(motivo);
+  const prazoRevisao =
+    revisaoMedica?.pendente && revisaoMedica.prazo
+      ? new Date(revisaoMedica.prazo).toLocaleDateString("pt-BR", {
+          timeZone: "America/Sao_Paulo",
+        })
+      : null;
+  const orientacao = prazoRevisao
+    ? `Sua revisão médica está pendente. Envie um novo laudo até ${prazoRevisao}. Seu acesso permanece disponível enquanto o prazo estiver vigente; depois do vencimento, ficará bloqueado até a aprovação. O envio tardio continua permitido.`
+    : "Seu cadastro continua pendente. Envie uma nova versão do documento; o acesso só será liberado após a aprovação do laudo e do cadastro.";
   return {
     subject: "Ação necessária no seu documento | Impacto Gym",
-    plainText: `O documento enviado para seu cadastro foi rejeitado.\n\nMotivo informado: ${motivo}\n\nEntre no sistema para corrigir o documento e enviá-lo novamente.`,
+    plainText: `O documento enviado para análise foi rejeitado.\n\nMotivo informado: ${motivo}\n\n${orientacao}`,
     html: layout(
-      "Seu documento precisa de uma correção antes da aprovação do cadastro.",
+      "Seu documento precisa de correção antes de ser aprovado.",
       "Revise seu documento",
       `<p style="margin:0 0 20px;color:#c5c5cc;font-size:15px;line-height:1.7;">O documento enviado para análise não pôde ser aprovado. Consulte o motivo e envie uma nova versão.</p>
        <div style="margin:0 0 22px;padding:18px;background-color:#19191e;border-left:3px solid #ea3b46;border-radius:4px;">
          <p style="margin:0 0 8px;color:#9b9ba3;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Motivo informado</p>
          <p style="margin:0;color:#ffffff;font-size:14px;line-height:1.7;">${safeMotivo}</p>
        </div>
-       <p style="margin:0;color:#b3b4b4;font-size:13px;line-height:1.7;">Entre no sistema para corrigir o documento e enviá-lo novamente. Seu acesso será liberado depois da análise e aprovação do cadastro.</p>`,
+       <p style="margin:0;color:#b3b4b4;font-size:13px;line-height:1.7;">${escapeHtml(orientacao)}</p>`,
+    ),
+  };
+}
+
+export function laudoSolicitadoEmail(prazo: Date | string): EmailTemplate {
+  const data = new Date(prazo).toLocaleDateString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+  });
+  const textoPrazo = `Envie um novo laudo médico até ${data}. Após esse prazo, seu acesso ficará bloqueado até a análise e aprovação do documento.`;
+  return {
+    subject: "Envie um novo laudo médico | Impacto Gym",
+    plainText: `Seus dados médicos foram atualizados.\n\n${textoPrazo}\n\nSe você acredita que esta mensagem foi enviada por engano, entre em contato com a academia.`,
+    html: layout(
+      "Seus dados médicos foram atualizados e precisam de uma nova análise.",
+      "Envie um novo laudo médico",
+      `<p style="margin:0 0 20px;color:#c5c5cc;font-size:15px;line-height:1.7;">Seus dados médicos foram atualizados e precisam de uma nova análise.</p>
+       <div style="margin:0 0 22px;padding:18px;background-color:#19191e;border-left:3px solid #1a63e5;border-radius:4px;">
+         <p style="margin:0;color:#ffffff;font-size:14px;line-height:1.7;">${escapeHtml(textoPrazo)}</p>
+       </div>
+       <p style="margin:0;color:#b3b4b4;font-size:13px;line-height:1.7;">Acesse sua conta e envie o documento atualizado. Se você acredita que esta mensagem foi enviada por engano, entre em contato com a academia.</p>`,
+    ),
+  };
+}
+
+export function laudoPendenteAtualizadoEmail(
+  prazo: Date | string,
+  laudoAnteriorInvalidado: boolean,
+): EmailTemplate {
+  const data = new Date(prazo).toLocaleDateString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+  });
+  const orientacao = laudoAnteriorInvalidado
+    ? `Como seus dados médicos foram atualizados antes da aprovação do cadastro, o laudo anterior não corresponde mais às informações atuais e foi invalidado. Envie um novo laudo até ${data}. O envio após essa data continua permitido, mas o cadastro só poderá ser aprovado depois da análise do novo documento.`
+    : `Como seus dados médicos foram atualizados antes da aprovação do cadastro, é necessário enviar um laudo correspondente às informações atuais até ${data}. O envio após essa data continua permitido, mas o cadastro só poderá ser aprovado depois da análise do documento.`;
+  return {
+    subject: "Envie um laudo médico atualizado | Impacto Gym",
+    plainText: `Seu cadastro continua em análise.\n\n${orientacao}\n\nSe você acredita que esta mensagem foi enviada por engano, entre em contato com a academia.`,
+    html: layout(
+      "Seu cadastro continua pendente e precisa de um laudo atualizado.",
+      "Envie um laudo atualizado",
+      `<p style="margin:0 0 20px;color:#c5c5cc;font-size:15px;line-height:1.7;">Seu cadastro continua em análise.</p>
+       <div style="margin:0 0 22px;padding:18px;background-color:#19191e;border-left:3px solid #1a63e5;border-radius:4px;">
+         <p style="margin:0;color:#ffffff;font-size:14px;line-height:1.7;">${escapeHtml(orientacao)}</p>
+       </div>
+       <p style="margin:0;color:#b3b4b4;font-size:13px;line-height:1.7;">Se você acredita que esta mensagem foi enviada por engano, entre em contato com a academia.</p>`,
     ),
   };
 }

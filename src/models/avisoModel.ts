@@ -2,7 +2,7 @@ import pool from "../config/database";
 
 const QUERY_AVISOS = `
   SELECT a.id AS id_aviso, a.titulo, a.mensagem, a.criado_em AS publicado_em,
-         u.nome AS autor_nome, u.foto_url AS autor_foto_url
+         u.id AS autor_id, u.nome AS autor_nome, u.foto_url AS autor_foto_url
   FROM avisos a JOIN usuarios u ON u.id = a.id_autor
   ORDER BY a.criado_em DESC
 `;

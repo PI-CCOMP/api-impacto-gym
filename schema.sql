@@ -9,7 +9,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 --  Enums 
 CREATE TYPE perfil_usuario     AS ENUM ('admin', 'instrutor', 'recepcionista', 'aluno');
 CREATE TYPE status_cadastro    AS ENUM ('pendente', 'ativo', 'rejeitado', 'inativo');
-CREATE TYPE status_documento   AS ENUM ('pendente', 'aprovado', 'rejeitado');
+CREATE TYPE status_documento   AS ENUM ('pendente', 'aprovado', 'rejeitado', 'cancelado');
 CREATE TYPE status_solicitacao AS ENUM ('aberto', 'atendido', 'cancelado');
 CREATE TYPE status_sessao      AS ENUM ('em_andamento', 'finalizado', 'abandonado');
 CREATE TYPE sexo_usuario       AS ENUM ('M', 'F', 'O', 'OUTRO', 'PREFIRO_NAO_DIZER');
@@ -66,7 +66,7 @@ CREATE TABLE auth_sessoes (
 
 CREATE TABLE auth_codigos_email (
   id_usuario   BIGINT      NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
-  finalidade   VARCHAR(32) NOT NULL CHECK (finalidade IN ('login_admin', 'recuperacao_senha', 'verificacao_cadastro')),
+  finalidade   VARCHAR(32) NOT NULL CHECK (finalidade IN ('login_admin', 'recuperacao_senha', 'verificacao_cadastro', 'alteracao_email', 'convite_conta')),
   codigo_hash  CHAR(64)    NOT NULL,
   tentativas   SMALLINT    NOT NULL DEFAULT 0 CHECK (tentativas BETWEEN 0 AND 5),
   expira_em    TIMESTAMPTZ NOT NULL,
@@ -81,10 +81,12 @@ CREATE TABLE alunos (
   id_usuario        BIGINT                  PRIMARY KEY REFERENCES usuarios(id) ON DELETE CASCADE,
   objetivo          objetivo_aluno          NOT NULL,
   nivel             nivel_aluno             NOT NULL,
-  deficiencia       deficiencia_aluno       NOT NULL DEFAULT 'nenhuma',
-  restricao_medica  restricao_medica_aluno  NOT NULL DEFAULT 'nenhuma',
+  deficiencia       deficiencia_aluno[]      NOT NULL DEFAULT ARRAY['nenhuma']::deficiencia_aluno[],
+  restricao_medica  restricao_medica_aluno[] NOT NULL DEFAULT ARRAY['nenhuma']::restricao_medica_aluno[],
   status            status_cadastro         NOT NULL DEFAULT 'pendente',
-  prazo_envio_laudo TIMESTAMPTZ             NOT NULL DEFAULT (NOW() + INTERVAL '10 days'),
+  prazo_envio_laudo TIMESTAMPTZ             NOT NULL DEFAULT (NOW() + INTERVAL '7 days'),
+  revisao_medica_pendente BOOLEAN            NOT NULL DEFAULT false,
+  prazo_revisao_medica TIMESTAMPTZ,
   id_instrutor      BIGINT                  REFERENCES usuarios(id) ON DELETE SET NULL,
   criado_em         TIMESTAMPTZ             NOT NULL DEFAULT NOW()
 );
@@ -102,7 +104,7 @@ CREATE TABLE documentos_comprobatorios (
 
 CREATE UNIQUE INDEX idx_documento_unico_em_revisao
   ON documentos_comprobatorios (id_aluno)
-  WHERE status IN ('pendente', 'aprovado');
+  WHERE status = 'pendente';
 
 --  exercicios 
 CREATE TABLE exercicios (

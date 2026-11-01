@@ -3,7 +3,6 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
-import path from "node:path";
 
 dotenv.config();
 
@@ -17,6 +16,9 @@ import historicoRoutes from "./routes/historico";
 import avisoRoutes from "./routes/avisos";
 import solicitacaoRoutes from "./routes/solicitacoes";
 import { errorHandler } from "./middlewares/errorHandler";
+import { authMiddleware } from "./middlewares/auth";
+import { servirFotoPerfil } from "./controllers/usuarioController";
+import { inicializarArmazenamentoFotos } from "./services/photoStorage";
 
 const app = express();
 
@@ -44,11 +46,6 @@ app.use(
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false }));
-app.use(
-  "/uploads/fotos",
-  express.static(path.resolve(process.env.UPLOAD_DIR ?? "uploads", "fotos")),
-);
-
 //  Health check (sem dados sensíveis)
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
@@ -58,6 +55,7 @@ app.get("/health", (_req, res) => {
 const api = express.Router();
 
 api.use("/auth", authRoutes);
+api.get("/usuarios/fotos/:id_usuario", authMiddleware, servirFotoPerfil);
 api.use("/cadastros", cadastroRoutes);
 api.use("/usuarios", usuarioRoutes);
 api.use("/treinos", treinoRoutes);
@@ -81,8 +79,32 @@ app.use(errorHandler);
 
 //  Start
 const PORT = Number(process.env.PORT) || 3001;
-app.listen(PORT, () => {
-  console.log(`[SERVER] Impacto Gym API rodando em http://localhost:${PORT}`);
-});
+void inicializarArmazenamentoFotos()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`[SERVER] Impacto Gym API rodando em http://localhost:${PORT}`);
+    });
+  })
+  .catch((error: unknown) => {
+    const name =
+      typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      typeof error.name === "string"
+        ? error.name
+        : "StorageError";
+    const code =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : undefined;
+    console.error("[STORAGE] Falha ao inicializar armazenamento privado de fotos.", {
+      name,
+      code,
+    });
+    process.exitCode = 1;
+  });
 
 export default app;

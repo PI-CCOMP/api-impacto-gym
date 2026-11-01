@@ -1,15 +1,18 @@
 import pool from "../config/database";
+import type { PoolClient } from "pg";
 
 export async function verificarDuplicado(email: string, cpf: string) {
   return pool.query(
-    "SELECT 1 FROM usuarios WHERE LOWER(email) = LOWER($1) OR cpf = $2",
+    `SELECT 1 FROM usuarios
+     WHERE LOWER(email) = LOWER($1) OR LOWER(email_pendente) = LOWER($1)
+       OR cpf = $2`,
     [email, cpf],
   );
 }
 
 // usuarios NAO tem coluna "status" — status fica em alunos
 export async function inserirUsuario(
-  client: any,
+  client: PoolClient,
   dados: {
     nome: string;
     cpf: string;
@@ -28,11 +31,11 @@ export async function inserirUsuario(
 
 // status passado aqui reflete RN12 (pendente ou ativo)
 export async function inserirAluno(
-  client: any,
+  client: PoolClient,
   dados: {
     idUsuario: number;
-    deficiencia: string;
-    restricaoMedica: string;
+    deficiencia: string[];
+    restricaoMedica: string[];
     objetivo: string;
     nivel: string;
     status: string;
@@ -40,12 +43,12 @@ export async function inserirAluno(
 ) {
   return client.query(
     `INSERT INTO alunos (id_usuario, deficiencia, restricao_medica, objetivo, nivel, status)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     VALUES ($1, $2, $3, $4::deficiencia_aluno[], $5::restricao_medica_aluno[], $6)
     RETURNING id_usuario, prazo_envio_laudo`,
     [
       dados.idUsuario,
-      dados.deficiencia || "nenhuma",
-      dados.restricaoMedica || "nenhuma",
+      dados.deficiencia,
+      dados.restricaoMedica,
       dados.objetivo,
       dados.nivel,
       dados.status,
@@ -54,17 +57,24 @@ export async function inserirAluno(
 }
 
 // status de aluno esta em alunos, nao em usuarios
-export async function buscarAlunoPendente(idAluno: string) {
+export async function buscarAlunoParaUpload(idAluno: string) {
   return pool.query(
-        `SELECT u.id,
-          (a.deficiencia <> 'nenhuma' OR a.restricao_medica <> 'nenhuma') AS tem_restricao,
+    `SELECT u.id, a.status, a.revisao_medica_pendente,
+          (cardinality(array_remove(a.deficiencia, 'nenhuma')) > 0
+            OR cardinality(array_remove(a.restricao_medica, 'nenhuma')) > 0) AS tem_restricao,
           EXISTS (
             SELECT 1 FROM documentos_comprobatorios d
-            WHERE d.id_aluno = u.id AND d.status IN ('pendente', 'aprovado')
-          ) AS tem_documento
+            WHERE d.id_aluno = u.id AND d.status = 'pendente'
+          ) AS tem_documento_pendente,
+          EXISTS (
+            SELECT 1 FROM documentos_comprobatorios d
+            WHERE d.id_aluno = u.id AND d.status = 'aprovado'
+          ) AS tem_documento_aprovado
      FROM usuarios u
      JOIN alunos a ON a.id_usuario = u.id
-     WHERE u.id = $1 AND a.status = 'pendente'`,
+     WHERE u.id = $1
+       AND (a.status = 'pendente'
+         OR (a.status = 'ativo' AND a.revisao_medica_pendente = true))`,
     [idAluno],
   );
 }
@@ -74,12 +84,71 @@ export async function inserirDocumento(
   caminho: string,
   nomeArquivo: string,
 ) {
-  return pool.query(
-    `INSERT INTO documentos_comprobatorios (id_aluno, caminho_arquivo, nome_arquivo, status)
-     VALUES ($1, $2, $3, 'pendente')
-     RETURNING id`,
-    [idAluno, caminho, nomeArquivo],
-  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: alunos } = await client.query<{
+      status: string;
+      revisao_medica_pendente: boolean;
+      tem_restricao: boolean;
+      tem_documento_pendente: boolean;
+      tem_documento_aprovado: boolean;
+    }>(
+      `SELECT a.status, a.revisao_medica_pendente,
+              (cardinality(array_remove(a.deficiencia, 'nenhuma')) > 0
+                OR cardinality(array_remove(a.restricao_medica, 'nenhuma')) > 0) AS tem_restricao,
+              EXISTS (
+                SELECT 1 FROM documentos_comprobatorios d
+                WHERE d.id_aluno = a.id_usuario AND d.status = 'pendente'
+              ) AS tem_documento_pendente,
+              EXISTS (
+                SELECT 1 FROM documentos_comprobatorios d
+                WHERE d.id_aluno = a.id_usuario AND d.status = 'aprovado'
+              ) AS tem_documento_aprovado
+       FROM alunos a
+       WHERE a.id_usuario = $1
+       FOR UPDATE`,
+      [idAluno],
+    );
+    const aluno = alunos[0];
+    if (!aluno) {
+      await client.query("COMMIT");
+      return { rows: [], erro: "UPLOAD_NAO_DISPONIVEL" };
+    }
+    if (!aluno.tem_restricao) {
+      await client.query("COMMIT");
+      return { rows: [], erro: "SEM_RESTRICAO" };
+    }
+    if (
+      aluno.tem_documento_pendente ||
+      (aluno.status === "pendente" && aluno.tem_documento_aprovado)
+    ) {
+      await client.query("COMMIT");
+      return { rows: [], erro: "DOCUMENTO_JA_ENVIADO" };
+    }
+    const uploadDisponivel =
+      aluno.status === "pendente" ||
+      (aluno.status === "ativo" && aluno.revisao_medica_pendente);
+    if (!uploadDisponivel) {
+      await client.query("COMMIT");
+      return { rows: [], erro: "UPLOAD_NAO_DISPONIVEL" };
+    }
+
+    const { rows } = await client.query(
+      `INSERT INTO documentos_comprobatorios
+         (id_aluno, caminho_arquivo, nome_arquivo, status)
+       VALUES ($1, $2, $3, 'pendente')
+       RETURNING id`,
+      [idAluno, caminho, nomeArquivo],
+    );
+    await client.query("COMMIT");
+    return { rows, erro: null };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // filtra por a.status (tabela alunos)
@@ -94,7 +163,10 @@ export async function listar(filtros: {
   return pool.query(
     `SELECT
       u.id AS id_aluno, u.nome, u.cpf, u.email, u.email_verificado,
-      a.deficiencia, a.restricao_medica, a.prazo_envio_laudo,
+      a.deficiencia::text[] AS deficiencia,
+      a.restricao_medica::text[] AS restricao_medica,
+      a.prazo_envio_laudo,
+      a.status, a.revisao_medica_pendente, a.prazo_revisao_medica,
       d.id AS id_documento, d.caminho_arquivo, d.nome_arquivo,
       d.status AS status_documento, d.motivo_rejeicao,
        u.criado_em AS cadastrado_em,
@@ -109,7 +181,10 @@ export async function listar(filtros: {
        LIMIT 1
      ) d ON true
      WHERE u.perfil = 'aluno'
-       AND a.status = $1
+       AND (
+         ($1 = 'revisao_medica' AND a.status = 'ativo' AND a.revisao_medica_pendente = true)
+         OR ($1 <> 'revisao_medica' AND a.status = $1::status_cadastro)
+       )
        AND ($2 = '' OR u.nome ILIKE '%' || $2 || '%' OR u.cpf ILIKE '%' || $2 || '%')
       AND ($5 = false OR a.id_instrutor = $6 OR a.id_instrutor IS NULL)
      ORDER BY u.criado_em ASC
@@ -139,7 +214,8 @@ export async function buscarAlunoPendenteParaAprovar(idAluno: string) {
   return pool.query(
     `SELECT
       u.id, u.email_verificado, a.id_instrutor,
-       (a.deficiencia <> 'nenhuma' OR a.restricao_medica <> 'nenhuma') AS tem_restricao,
+       (cardinality(array_remove(a.deficiencia, 'nenhuma')) > 0
+         OR cardinality(array_remove(a.restricao_medica, 'nenhuma')) > 0) AS tem_restricao,
        COALESCE((
          SELECT d.status = 'aprovado'
          FROM documentos_comprobatorios d
@@ -157,7 +233,8 @@ export async function buscarAlunoPendenteParaAprovar(idAluno: string) {
 export async function buscarDocumento(idAluno: string, idDocumento: string) {
   return pool.query(
     `SELECT d.id, d.id_aluno, d.caminho_arquivo, d.nome_arquivo, d.status,
-            d.motivo_rejeicao, u.email, u.perfil, a.id_instrutor
+            d.motivo_rejeicao, u.email, u.perfil, a.id_instrutor,
+            a.revisao_medica_pendente, a.prazo_revisao_medica
      FROM documentos_comprobatorios d
      JOIN usuarios u ON u.id = d.id_aluno
      JOIN alunos a ON a.id_usuario = u.id
@@ -167,12 +244,41 @@ export async function buscarDocumento(idAluno: string, idDocumento: string) {
 }
 
 export async function aprovarDocumento(idAluno: string, idDocumento: string) {
-  return pool.query(
-    `UPDATE documentos_comprobatorios SET status = 'aprovado', motivo_rejeicao = NULL
-     WHERE id_aluno = $1 AND id = $2 AND status = 'pendente'
-     RETURNING id`,
-    [idAluno, idDocumento],
-  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const aluno = await client.query(
+      `SELECT id_usuario FROM alunos WHERE id_usuario = $1 FOR UPDATE`,
+      [idAluno],
+    );
+    if (aluno.rows.length === 0) {
+      await client.query("COMMIT");
+      return { rows: [] };
+    }
+    const { rows } = await client.query(
+      `UPDATE documentos_comprobatorios
+       SET status = 'aprovado', motivo_rejeicao = NULL
+       WHERE id_aluno = $1 AND id = $2 AND status = 'pendente'
+       RETURNING id`,
+      [idAluno, idDocumento],
+    );
+    if (rows.length > 0) {
+      await client.query(
+        `UPDATE alunos
+         SET revisao_medica_pendente = false, prazo_revisao_medica = NULL
+         WHERE id_usuario = $1 AND status = 'ativo'
+           AND revisao_medica_pendente = true`,
+        [idAluno],
+      );
+    }
+    await client.query("COMMIT");
+    return { rows };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function rejeitarDocumento(
@@ -199,7 +305,9 @@ export async function rejeitar(idAluno: string) {
 
 export async function rejeitarDocumentos(idAluno: string, motivo: string) {
   return pool.query(
-    `UPDATE documentos_comprobatorios SET status = 'rejeitado', motivo_rejeicao = $1 WHERE id_aluno = $2`,
+    `UPDATE documentos_comprobatorios
+     SET status = 'rejeitado', motivo_rejeicao = $1
+     WHERE id_aluno = $2 AND status = 'pendente'`,
     [motivo, idAluno],
   );
 }

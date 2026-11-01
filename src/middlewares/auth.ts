@@ -37,8 +37,11 @@ export async function authMiddleware(
       perfil: Perfil;
       email_verificado: boolean;
       status: string | null;
+      revisao_medica_pendente: boolean | null;
+      prazo_revisao_medica: Date | null;
     }>(
-      `SELECT u.id, u.perfil, u.email_verificado, a.status
+      `SELECT u.id, u.perfil, u.email_verificado, a.status,
+              a.revisao_medica_pendente, a.prazo_revisao_medica
        FROM usuarios u
        LEFT JOIN alunos a ON a.id_usuario = u.id
       JOIN auth_sessoes s ON s.id = $2 AND s.id_usuario = u.id
@@ -62,11 +65,41 @@ export async function authMiddleware(
       return;
     }
 
-    // Alunos inativos/pendentes/rejeitados não acessam rotas protegidas
     if (rows[0].perfil === "aluno" && rows[0].status !== "ativo") {
+      const cadastro =
+        rows[0].status === "rejeitado"
+          ? {
+              mensagem:
+                "Seu cadastro foi rejeitado. Entre em contato com a academia.",
+              codigo: "CADASTRO_REJEITADO",
+            }
+          : rows[0].status === "inativo"
+            ? {
+                mensagem:
+                  "Seu cadastro está inativo. Entre em contato com a academia.",
+                codigo: "CADASTRO_INATIVO",
+              }
+            : {
+                mensagem:
+                  "Seu cadastro está aguardando aprovação da academia.",
+                codigo: "CADASTRO_PENDENTE",
+              };
       res.status(403).json({
-        erro: "Cadastro pendente de aprovação.",
-        codigo: "CADASTRO_INATIVO",
+        erro: cadastro.mensagem,
+        codigo: cadastro.codigo,
+      });
+      return;
+    }
+
+    if (
+      rows[0].perfil === "aluno" &&
+      rows[0].revisao_medica_pendente &&
+      rows[0].prazo_revisao_medica &&
+      new Date(rows[0].prazo_revisao_medica).getTime() <= Date.now()
+    ) {
+      res.status(403).json({
+        erro: "O prazo para envio do laudo expirou. Envie o documento para liberar seu acesso após a análise.",
+        codigo: "REVISAO_MEDICA_PENDENTE",
       });
       return;
     }
@@ -79,10 +112,8 @@ export async function authMiddleware(
     } satisfies UsuarioToken;
 
     next();
-  } catch {
-    res
-      .status(500)
-      .json({ erro: "Erro interno no servidor.", codigo: "ERRO_INTERNO" });
+  } catch (err) {
+    next(err);
   }
 }
 

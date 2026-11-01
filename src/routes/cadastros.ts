@@ -36,11 +36,11 @@ router.post('/', cadastroLimiter, cadastrarAluno)
 router.post('/:id_aluno/documento', uploadLaudoLimiter, autorizarUploadLaudoPendente, uploadLaudo, handleMulterError, uploadDocumento)
 
 // Protegidas
-router.get('/', authMiddleware, authorize('admin', 'instrutor'), listarCadastros)
-router.patch('/:id_aluno/aprovar', authMiddleware, authorize('admin', 'instrutor'), aprovarCadastro)
-router.patch('/:id_aluno/rejeitar', authMiddleware, authorize('admin'), rejeitarCadastro)
-router.get('/:id_aluno/documentos/:id_documento', authMiddleware, authorize('admin'), verDocumento)
-router.patch('/:id_aluno/documentos/:id_documento/aprovar', authMiddleware, authorize('admin'), aprovarDocumento)
-router.patch('/:id_aluno/documentos/:id_documento/rejeitar', authMiddleware, authorize('admin'), rejeitarDocumento)
+router.get('/', authMiddleware, authorize('admin', 'recepcionista'), listarCadastros)
+router.patch('/:id_aluno/aprovar', authMiddleware, authorize('admin', 'recepcionista'), aprovarCadastro)
+router.patch('/:id_aluno/rejeitar', authMiddleware, authorize('admin', 'recepcionista'), rejeitarCadastro)
+router.get('/:id_aluno/documentos/:id_documento', authMiddleware, authorize('admin', 'recepcionista'), verDocumento)
+router.patch('/:id_aluno/documentos/:id_documento/aprovar', authMiddleware, authorize('admin', 'recepcionista'), aprovarDocumento)
+router.patch('/:id_aluno/documentos/:id_documento/rejeitar', authMiddleware, authorize('admin', 'recepcionista'), rejeitarDocumento)
 
 export default router

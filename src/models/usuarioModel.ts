@@ -1,4 +1,5 @@
 import pool from "../config/database";
+import type { PoolClient } from "pg";
 
 export async function listar(filtros: {
   perfil: string;
@@ -12,7 +13,9 @@ export async function listar(filtros: {
   return pool.query(
     `SELECT
       u.id AS id_usuario, u.nome, u.cpf, u.perfil, u.email,
-      a.status, a.deficiencia, a.restricao_medica,
+      a.status, a.deficiencia::text[] AS deficiencia,
+      a.restricao_medica::text[] AS restricao_medica,
+      a.revisao_medica_pendente, a.prazo_revisao_medica,
        ui.nome AS instrutor_vinculado,
        COUNT(*) OVER() AS total
      FROM usuarios u
@@ -20,7 +23,7 @@ export async function listar(filtros: {
      LEFT JOIN usuarios ui ON ui.id = a.id_instrutor
      WHERE ($1 = '' OR u.perfil = $1::perfil_usuario)
        AND ($2 = '' OR u.nome ILIKE '%' || $2 || '%' OR u.cpf ILIKE '%' || $2 || '%')
-      AND ($3 = false OR a.id_instrutor = $4 OR (a.id_instrutor IS NULL AND u.perfil = 'aluno'))
+      AND ($3 = false OR a.id_instrutor = $4)
       AND ($7 = false OR u.perfil = 'aluno')
      ORDER BY u.nome ASC
      LIMIT $5 OFFSET $6`,
@@ -48,8 +51,12 @@ export async function existePorId(id: string) {
   return pool.query(
     `SELECT
        u.id AS id_usuario, u.nome, u.cpf, u.email, u.sexo, u.foto_url, u.perfil, u.criado_em,
-      a.nivel, a.objetivo, a.deficiencia, a.restricao_medica, a.status,
-      a.prazo_envio_laudo, a.id_instrutor, u.email_verificado
+      a.nivel, a.objetivo,
+      a.deficiencia::text[] AS deficiencia,
+      a.restricao_medica::text[] AS restricao_medica,
+      a.status,
+      a.prazo_envio_laudo, a.revisao_medica_pendente, a.prazo_revisao_medica,
+      a.id_instrutor, u.email_verificado
      FROM usuarios u
      LEFT JOIN alunos a ON a.id_usuario = u.id
      WHERE u.id = $1`,
@@ -78,13 +85,15 @@ export async function verificarInstrutorDoAluno(
 
 export async function verificarDuplicado(email: string, cpf: string) {
   return pool.query(
-    "SELECT 1 FROM usuarios WHERE LOWER(email) = LOWER($1) OR cpf = $2",
+    `SELECT 1 FROM usuarios
+     WHERE LOWER(email) = LOWER($1) OR LOWER(email_pendente) = LOWER($1)
+       OR cpf = $2`,
     [email, cpf],
   );
 }
 
 export async function inserirUsuario(
-  client: any,
+  client: PoolClient,
   dados: {
     nome: string;
     cpf: string;
@@ -112,27 +121,26 @@ export async function inserirUsuario(
 }
 
 export async function inserirAluno(
-  client: any,
+  client: PoolClient,
   dados: {
     idUsuario: number;
     objetivo: string;
     nivel: string;
-    deficiencia: string;
-    restricaoMedica: string;
+    deficiencia: string[];
+    restricaoMedica: string[];
     status: string;
   },
 ) {
   return client.query(
-    // [CORRIGIDO] casts explícitos para os novos enums deficiencia_aluno e restricao_medica_aluno
     `INSERT INTO alunos (id_usuario, objetivo, nivel, deficiencia, restricao_medica, status)
-    VALUES ($1, $2::objetivo_aluno, $3::nivel_aluno, $4::deficiencia_aluno, $5::restricao_medica_aluno, $6::status_cadastro)
+    VALUES ($1, $2::objetivo_aluno, $3::nivel_aluno, $4::deficiencia_aluno[], $5::restricao_medica_aluno[], $6::status_cadastro)
     RETURNING id_usuario, prazo_envio_laudo`,
     [
       dados.idUsuario,
       dados.objetivo,
       dados.nivel,
-      dados.deficiencia || "nenhuma",
-      dados.restricaoMedica || "nenhuma",
+      dados.deficiencia,
+      dados.restricaoMedica,
       dados.status,
     ],
   );
@@ -151,16 +159,16 @@ export async function atualizar(
   return pool.query(
     `UPDATE usuarios SET
        nome = COALESCE($1, nome),
-       email = COALESCE($2, email),
-       email_verificado = CASE
-         WHEN $2 IS NOT NULL AND LOWER($2) <> LOWER(email) THEN false
-         ELSE email_verificado
+       email_pendente = CASE
+         WHEN $2 IS NULL THEN email_pendente
+         WHEN LOWER($2) <> LOWER(email) THEN $2
+         ELSE NULL
        END,
        sexo = COALESCE($3::sexo_usuario, sexo),
       perfil = COALESCE($4::perfil_usuario, perfil),
       foto_url = COALESCE($5, foto_url)
     WHERE id = $6
-    RETURNING id, email, email_verificado`,
+    RETURNING id, email, email_pendente, email_verificado`,
     [
       dados.nome ?? null,
       dados.email ?? null,
@@ -177,43 +185,134 @@ export async function atualizarAluno(
   dados: {
     objetivo?: string;
     nivel?: string;
-    deficiencia?: string;
-    restricaoMedica?: string;
+    deficiencia?: string[];
+    restricaoMedica?: string[];
     idInstrutor?: number | null;
+    atualizarInstrutor?: boolean;
   },
 ) {
-  // [CORRIGIDO] casts explícitos para os novos enums
-  return pool.query(
-    `UPDATE alunos SET
-       objetivo = COALESCE($1::objetivo_aluno, objetivo),
-       nivel = COALESCE($2::nivel_aluno, nivel),
-       deficiencia = COALESCE($3::deficiencia_aluno, deficiencia),
-       restricao_medica = COALESCE($4::restricao_medica_aluno, restricao_medica),
-       status = CASE
-         WHEN (deficiencia = 'nenhuma' AND COALESCE($3::deficiencia_aluno, deficiencia) <> 'nenhuma')
-           OR (restricao_medica = 'nenhuma' AND COALESCE($4::restricao_medica_aluno, restricao_medica) <> 'nenhuma')
-         THEN 'pendente'::status_cadastro
-         ELSE status
-       END,
-       id_instrutor = $5
-     WHERE id_usuario = $6
-     RETURNING status`,
-    [
-      dados.objetivo ?? null,
-      dados.nivel ?? null,
-      dados.deficiencia ?? null,
-      dados.restricaoMedica ?? null,
-      dados.idInstrutor ?? null,
-      idUsuario,
-    ],
-  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: atuais } = await client.query<{
+      status: string;
+      deficiencia: string[];
+      restricao_medica: string[];
+    }>(
+      `SELECT status, deficiencia::text[] AS deficiencia,
+              restricao_medica::text[] AS restricao_medica
+       FROM alunos WHERE id_usuario = $1 FOR UPDATE`,
+      [idUsuario],
+    );
+    if (atuais.length === 0) {
+      await client.query("COMMIT");
+      return {
+        rows: [],
+        revisaoIniciada: false,
+        laudoPendenteInvalidado: false,
+        laudoPendenteNecessario: false,
+      };
+    }
+
+    const atual = atuais[0];
+    const deficiencia = dados.deficiencia ?? atual.deficiencia;
+    const restricaoMedica = dados.restricaoMedica ?? atual.restricao_medica;
+    const listaOrdenada = (valores: string[]) => [...valores].sort().join(",");
+    const dadosMedicosAlterados =
+      (dados.deficiencia !== undefined &&
+        listaOrdenada(dados.deficiencia) !== listaOrdenada(atual.deficiencia)) ||
+      (dados.restricaoMedica !== undefined &&
+        listaOrdenada(dados.restricaoMedica) !==
+          listaOrdenada(atual.restricao_medica));
+    const temCondicao =
+      deficiencia.some((valor) => valor !== "nenhuma") ||
+      restricaoMedica.some((valor) => valor !== "nenhuma");
+
+    const { rows } = await client.query(
+      `UPDATE alunos SET
+         objetivo = COALESCE($1::objetivo_aluno, objetivo),
+         nivel = COALESCE($2::nivel_aluno, nivel),
+         deficiencia = COALESCE($3::deficiencia_aluno[], deficiencia),
+         restricao_medica = COALESCE($4::restricao_medica_aluno[], restricao_medica),
+         id_instrutor = CASE WHEN $5::boolean THEN $6::bigint ELSE id_instrutor END,
+         revisao_medica_pendente = CASE
+           WHEN $7::boolean AND status = 'ativo' THEN $8::boolean
+           ELSE revisao_medica_pendente
+         END,
+         prazo_revisao_medica = CASE
+           WHEN $7::boolean AND status = 'ativo' AND $8::boolean
+             THEN NOW() + INTERVAL '7 days'
+           WHEN $7::boolean AND status = 'ativo' THEN NULL
+           ELSE prazo_revisao_medica
+         END
+       WHERE id_usuario = $9
+       RETURNING status, prazo_envio_laudo, revisao_medica_pendente,
+                 prazo_revisao_medica`,
+      [
+        dados.objetivo ?? null,
+        dados.nivel ?? null,
+        dados.deficiencia ?? null,
+        dados.restricaoMedica ?? null,
+        dados.atualizarInstrutor ?? false,
+        dados.idInstrutor ?? null,
+        dadosMedicosAlterados,
+        temCondicao,
+        idUsuario,
+      ],
+    );
+
+    let laudoPendenteInvalidado = false;
+    if (dadosMedicosAlterados && atual.status === "pendente") {
+      const { rowCount } = await client.query(
+        `UPDATE documentos_comprobatorios
+         SET status = 'cancelado', motivo_rejeicao = 'Dados médicos alterados.'
+         WHERE id_aluno = $1 AND status IN ('pendente', 'aprovado')`,
+        [idUsuario],
+      );
+      laudoPendenteInvalidado = Boolean(rowCount && temCondicao);
+    } else if (dadosMedicosAlterados && atual.status === "ativo") {
+      await client.query(
+        `UPDATE documentos_comprobatorios
+         SET status = 'cancelado', motivo_rejeicao = 'Dados médicos alterados.'
+         WHERE id_aluno = $1 AND status = 'pendente'`,
+        [idUsuario],
+      );
+    }
+    await client.query("COMMIT");
+    return {
+      rows,
+      revisaoIniciada:
+        dadosMedicosAlterados && atual.status === "ativo" && temCondicao,
+      laudoPendenteInvalidado,
+      laudoPendenteNecessario:
+        dadosMedicosAlterados && atual.status === "pendente" && temCondicao,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function buscarPorId(id: string) {
-  return pool.query("SELECT id FROM usuarios WHERE id = $1", [id]);
+  return pool.query(
+    `SELECT u.id AS id_usuario, u.nome, u.cpf, u.email, u.sexo, u.foto_url,
+            u.perfil, u.criado_em, u.email_verificado,
+            a.nivel, a.objetivo,
+            a.deficiencia::text[] AS deficiencia,
+            a.restricao_medica::text[] AS restricao_medica,
+            a.status,
+            a.prazo_envio_laudo, a.revisao_medica_pendente,
+            a.prazo_revisao_medica, a.id_instrutor
+     FROM usuarios u
+     LEFT JOIN alunos a ON a.id_usuario = u.id
+     WHERE u.id = $1`,
+    [id],
+  );
 }
 
-export async function excluirPorId(client: any, id: string) {
+export async function excluirPorId(client: PoolClient, id: string) {
   return client.query("DELETE FROM usuarios WHERE id = $1", [id]);
 }
 
@@ -245,7 +344,10 @@ export async function validarPerfilInstrutor(idInstrutor: number) {
   );
 }
 
-export async function inativarTreinosDoAluno(client: any, idUsuario: string) {
+export async function inativarTreinosDoAluno(
+  client: PoolClient,
+  idUsuario: string,
+) {
   return client.query(
     `UPDATE aluno_treinos SET ativo = false
      WHERE id_aluno = $1 AND ativo = true`,
@@ -254,7 +356,7 @@ export async function inativarTreinosDoAluno(client: any, idUsuario: string) {
 }
 
 export async function atualizarInstrutorDoAluno(
-  client: any,
+  client: PoolClient,
   idUsuario: string,
   idInstrutor: number | null,
   somenteProprioOuSemVinculo: boolean,

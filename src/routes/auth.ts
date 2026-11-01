@@ -2,6 +2,7 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import {
   login,
+  reenviarCodigoLoginAdmin,
   refreshToken,
   logout,
   verificarLoginAdmin,
@@ -38,6 +39,7 @@ const emailCodeLimiter = rateLimit({
 });
 
 router.post("/login", loginLimiter, login);
+router.post("/login/reenviar-codigo", loginLimiter, reenviarCodigoLoginAdmin);
 router.post("/login/verificar-email", loginLimiter, verificarLoginAdmin);
 router.post("/email/verificar", emailCodeLimiter, verificarEmailCadastro);
 router.post("/email/reenviar-verificacao", emailCodeLimiter, reenviarVerificacaoEmail);

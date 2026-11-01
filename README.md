@@ -89,7 +89,9 @@ docker compose up -d
 npm install
 ```
 
-3. Configure o `.env` com `DATABASE_URL`, `JWT_SECRET` (aleatório, com pelo menos 32 caracteres), as variáveis `ADMIN_*` para provisionar o primeiro administrador, `AZURE_COMMUNICATION_CONNECTION_STRING` e `AZURE_COMMUNICATION_SENDER_EMAIL` para envio de e-mail.
+Use Node.js 22 ou superior. Configure o `.env` com `DATABASE_URL`, `JWT_SECRET` (aleatório, com pelo menos 32 caracteres), as variáveis `ADMIN_*` para provisionar o primeiro administrador, `AZURE_COMMUNICATION_CONNECTION_STRING` e `AZURE_COMMUNICATION_SENDER_EMAIL` para envio de e-mail.
+
+Para testes locais, `DISABLE_EMAIL=true` desativa o envio e imprime o conteúdo dos e-mails, incluindo códigos, no terminal. Essa opção é ignorada em produção e não deve ser habilitada em ambientes produtivos.
 
 4. Crie o primeiro administrador e inicie a API:
 
@@ -100,9 +102,15 @@ npm run dev
 
 A API fica em `http://localhost:3001`. O PostgreSQL local usa um volume Docker persistente; `schema.sql` é executado na primeira inicialização de um volume vazio.
 
-O login de administrador ocorre em duas etapas. `POST /auth/login` valida e-mail e senha e envia um código via Azure Communication Services; depois, `POST /auth/login/verificar-email` recebe `{ "email": "...", "codigo": "123456" }` e só então retorna os tokens. Os demais perfis continuam recebendo os tokens após o login. Para que o fechamento da página encerre a sessão do navegador, o frontend deve manter os tokens em `sessionStorage`, não em `localStorage`; o backend revoga a sessão no logout e aceita refresh por até sete dias.
+Para executar API e PostgreSQL em containers, configure as variáveis no `.env` e use `docker compose --profile api up -d`. Em produção, configure `FILE_STORAGE_PROVIDER=azure`, `AZURE_STORAGE_CONNECTION_STRING` e, opcionalmente, `AZURE_STORAGE_PHOTOS_CONTAINER`; o container de fotos permanece privado. O armazenamento local é destinado ao desenvolvimento. Laudos médicos continuam em armazenamento local privado.
 
-Arquivos de perfil são salvos em `UPLOAD_DIR` e servidos pela API. Laudos médicos ficam em armazenamento local privado e não são expostos como arquivos estáticos. No Azure App Service, configure um caminho persistente para `UPLOAD_DIR`.
+O login de administrador, recepcionista e instrutor ocorre em duas etapas: `POST /auth/login` envia o código e `POST /auth/login/verificar-email` valida `{ "email": "...", "codigo": "123456" }`. O código pode ser reenviado por `POST /auth/login/reenviar-codigo`. Cadastros de aluno, inclusive os criados por um administrador, ficam pendentes até aprovação manual; deficiência e restrição médica são listas de enums.
+
+Se já existe um volume PostgreSQL, aplique manualmente cada migration ainda não executada. Para bancos anteriores à 006, execute primeiro `docker compose exec -T postgres psql -U impacto_gym -d impacto_gym -f /docker-entrypoint-initdb.d/007-medical-lists-and-pending-email.sql`; depois aplique 007 com `docker compose exec -T postgres psql -U impacto_gym -d impacto_gym -f /docker-entrypoint-initdb.d/008-medical-review-private-photos.sql`. A migration 007 encerra sessões antigas da equipe para exigir o novo MFA; admin, recepcionistas e instrutores precisarão entrar novamente. Volumes novos executam o schema e as migrations automaticamente.
+
+Fotos de perfil são validadas pelo conteúdo, convertidas para WebP, redimensionadas para até 512 × 512 e armazenadas em `UPLOAD_DIR` no desenvolvimento ou Azure Blob em produção. As URLs seguem o endpoint autenticado `GET /usuarios/fotos/:id_usuario` e exigem token Bearer.
+
+Alunos ativos mantêm o acesso por sete dias após uma alteração real nas informações médicas que exija nova documentação. A partir do vencimento, login, renovação de sessão e rotas autenticadas ficam bloqueados até a aprovação do novo laudo; o envio tardio continua disponível com token próprio. Se deficiência e restrição voltarem a `nenhuma`, a revisão pendente é cancelada e não se exige laudo. Para cadastros ainda pendentes, uma alteração médica invalida laudos anteriores; o aluno precisa enviar um novo documento e o prazo original de sete dias não é reiniciado.
 
 ---
 
@@ -184,15 +192,16 @@ Responsável pela interface do aluno, instrutor e recepção.
 | PATCH | `/cadastros/:id_aluno/documentos/:id_documento/aprovar` |
 | PATCH | `/cadastros/:id_aluno/documentos/:id_documento/rejeitar` |
 
-No cadastro público, `/cadastros` envia um código ACS e retorna `email_verification_required`. Confirme com `POST /auth/email/verificar`, enviando `{ "email": "...", "codigo": "123456" }`. Para alunos pendentes com restrição/deficiência, a confirmação retorna `cadastro_token`, válido por 30 minutos e restrito ao envio do próprio laudo. Caso expire, `POST /auth/email/solicitar-upload-laudo` recebe e-mail/senha e emite outro token. O aluno pode enviar o documento após o cadastro; o prazo de 10 dias é informado, mas não impede envio tardio. O acesso só é liberado após o e-mail confirmado, laudo aprovado quando exigido e cadastro aprovado.
+No cadastro público, `/cadastros` envia um código ACS e retorna `email_verification_required`. Confirme com `POST /auth/email/verificar`, enviando `{ "email": "...", "codigo": "123456" }`. Para alunos pendentes com restrição/deficiência, a confirmação retorna `cadastro_token`, válido por 30 minutos e restrito ao envio do próprio laudo. Caso expire, `POST /auth/email/solicitar-upload-laudo` recebe e-mail/senha e emite outro token. O envio tardio continua permitido.
 
-Admin e assistente administrativo aprovam/rejeitam documentos. A rejeição exige `motivo_rejeicao` e tenta notificar o aluno por e-mail. A aprovação do cadastro não aprova automaticamente o laudo.
+Admin e recepcionista aprovam/rejeitam cadastros e documentos; instrutores não acessam laudos nem aprovam cadastros. A rejeição exige `motivo_rejeicao` e tenta notificar o aluno por e-mail. A aprovação do cadastro não aprova automaticamente o laudo.
 
 ### 👥 Usuários
 
 | Método | Endpoint |
 |--------|-----------|
 | GET | `/usuarios` |
+| GET | `/usuarios/fotos/:id_usuario` (Bearer obrigatório) |
 | POST | `/usuarios` |
 | PUT | `/usuarios/:id` |
 | DELETE | `/usuarios/:id` |

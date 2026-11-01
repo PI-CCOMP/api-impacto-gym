@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import * as SolicitacaoModel from "../models/solicitacaoModel";
+import { urlFotoPerfil } from "../services/photoStorage";
 
 // POST /solicitacoes-auxilio
 export async function criarSolicitacao(
@@ -81,7 +82,10 @@ export async function solicitacoesDashboard(
     res.json({
       dados: rows.map((r) => ({
         id_solicitacao: r.id_solicitacao,
-        aluno: { nome: r.aluno_nome, foto_url: r.aluno_foto_url },
+        aluno: {
+          nome: r.aluno_nome,
+          foto_url: urlFotoPerfil(r.aluno_id, r.aluno_foto_url),
+        },
         nome_exercicio: r.nome_exercicio,
         status: r.status,
         solicitado_em: r.solicitado_em,
