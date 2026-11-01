@@ -87,11 +87,24 @@ export async function buscarExerciciosDoAluno_treino(idAluno_treino: string) {
   );
 }
 
-export async function buscarExercicioPorId(idExercicio: string) {
+export async function buscarExercicioPorId(
+  idExercicio: string,
+  idAluno: number,
+) {
   return pool.query(
-    `SELECT id AS id_exercicio, nome, foto_url, video_url, imagem_ativacao_muscular_url, grupo_muscular
-     FROM exercicios WHERE id = $1 AND ativo = true`,
-    [idExercicio],
+    `SELECT e.id AS id_exercicio, e.nome, e.foto_url, e.video_url,
+            e.imagem_ativacao_muscular_url, e.grupo_muscular
+     FROM exercicios e
+     WHERE e.id = $1
+       AND e.ativo = true
+       AND EXISTS (
+         SELECT 1
+         FROM aluno_treino_exercicios ate
+         JOIN aluno_treinos at ON at.id = ate.id_aluno_treino
+         WHERE ate.id_exercicio = e.id
+           AND at.id_aluno = $2
+       )`,
+    [idExercicio, idAluno],
   );
 }
 

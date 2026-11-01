@@ -82,7 +82,10 @@ export async function buscarExercicio(
 ): Promise<void> {
   try {
     const { id_exercicio } = req.params;
-    const { rows } = await TreinoModel.buscarExercicioPorId(id_exercicio);
+    const { rows } = await TreinoModel.buscarExercicioPorId(
+      id_exercicio,
+      req.user!.id_usuario,
+    );
     if (rows.length === 0) {
       res
         .status(404)

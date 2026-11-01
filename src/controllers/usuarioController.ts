@@ -143,14 +143,12 @@ function resolverPermissoes(perfil: string): string[] {
     case "instrutor":
       return [
         "ver_aluno",
-        "editar_aluno",
         "gerenciar_treinos",
         "ver_solicitacoes",
       ];
     case "recepcionista":
       return [
         "ver_aluno",
-        "editar_aluno_basico",
         "aprovar_cadastro",
         "gerenciar_avisos",
       ];
