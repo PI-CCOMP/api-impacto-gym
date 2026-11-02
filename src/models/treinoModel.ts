@@ -85,7 +85,27 @@ export async function buscarExerciciosDoAluno_treino(idAluno_treino: string) {
          'numero', ate.numero_serie,
          'repeticoes', ate.repeticoes,
          'carga_sugerida', ate.carga_sugerida,
-         'tempo_descanso', ate.tempo_descanso
+         'tempo_descanso', ate.tempo_descanso,
+         'carga_ultima', (
+           SELECT ss.carga_real
+           FROM sessao_series ss
+           JOIN historico_treinos ht ON ht.id_sessao = ss.id_sessao
+           WHERE ht.id_aluno_treino = ate.id_aluno_treino
+             AND ss.id_aluno_treino_exercicio = ate.id
+             AND ss.numero_serie = ate.numero_serie
+           ORDER BY ht.criado_em DESC, ht.id DESC
+           LIMIT 1
+         ),
+         'repeticoes_ultimas', (
+           SELECT COALESCE(ss.repeticoes_real, ate.repeticoes)
+           FROM sessao_series ss
+           JOIN historico_treinos ht ON ht.id_sessao = ss.id_sessao
+           WHERE ht.id_aluno_treino = ate.id_aluno_treino
+             AND ss.id_aluno_treino_exercicio = ate.id
+             AND ss.numero_serie = ate.numero_serie
+           ORDER BY ht.criado_em DESC, ht.id DESC
+           LIMIT 1
+         )
        ) ORDER BY ate.numero_serie) AS series
      FROM aluno_treino_exercicios ate
      JOIN exercicios e ON e.id = ate.id_exercicio
