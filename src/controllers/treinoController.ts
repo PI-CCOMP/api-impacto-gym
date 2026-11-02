@@ -1,7 +1,15 @@
 import { Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
 import pool from "../config/database";
 import * as TreinoModel from "../models/treinoModel";
 import { GRUPOS_MUSCULARES_VALIDOS } from "../types";
+import sharp from "sharp";
+import {
+  armazenarMidiaExercicio,
+  obterMidiaExercicio,
+  urlMidiaExercicio,
+  type TipoMidiaExercicio,
+} from "../services/exerciseMediaStorage";
 
 type ExercicioDoTreinoInput = {
   id_exercicio: number;
@@ -691,6 +699,181 @@ export async function excluirExercicio(
     }
 
     res.json({ excluido: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const TIPOS_MIDIA_EXERCICIO: TipoMidiaExercicio[] = [
+  "foto",
+  "video",
+  "ativacao",
+];
+
+function ehTipoMidiaExercicio(tipo: string): tipo is TipoMidiaExercicio {
+  return TIPOS_MIDIA_EXERCICIO.some((item) => item === tipo);
+}
+
+export async function enviarMidiaExercicio(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { id_exercicio, tipo } = req.params;
+    if (!/^\d+$/.test(id_exercicio)) {
+      res.status(400).json({
+        erro: "Identificador de exercício inválido.",
+        codigo: "ID_INVALIDO",
+      });
+      return;
+    }
+    if (!ehTipoMidiaExercicio(tipo)) {
+      res.status(400).json({
+        erro: "Tipo de mídia inválido.",
+        codigo: "MIDIA_INVALIDA",
+      });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({
+        erro: "Selecione um arquivo para enviar.",
+        codigo: "ARQUIVO_OBRIGATORIO",
+      });
+      return;
+    }
+
+    const tipoMidia = tipo;
+    const exercicio = await TreinoModel.buscarMidiaExercicio(
+      id_exercicio,
+      tipoMidia,
+    );
+    if (exercicio.rows.length === 0) {
+      res.status(404).json({
+        erro: "Exercício não encontrado.",
+        codigo: "NAO_ENCONTRADO",
+      });
+      return;
+    }
+
+    let conteudo = req.file.buffer;
+    let contentType: string;
+    if (tipoMidia === "video") {
+      if (
+        conteudo.length < 12 ||
+        !(
+          conteudo.toString("ascii", 4, 8) === "ftyp" ||
+          conteudo.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))
+        )
+      ) {
+        res.status(415).json({
+          erro: "O vídeo deve ser um arquivo MP4 ou WebM válido.",
+          codigo: "FORMATO_INVALIDO",
+        });
+        return;
+      }
+      contentType =
+        conteudo.toString("ascii", 4, 8) === "ftyp" ? "video/mp4" : "video/webm";
+    } else {
+      try {
+        const metadata = await sharp(conteudo, {
+          failOn: "error",
+          limitInputPixels: 40_000_000,
+        }).metadata();
+        if (
+          !["jpeg", "png", "webp"].includes(metadata.format ?? "") ||
+          !metadata.width ||
+          !metadata.height ||
+          metadata.width * metadata.height > 40_000_000
+        ) {
+          res.status(415).json({
+            erro: "A imagem deve ser JPEG, PNG ou WEBP.",
+            codigo: "FORMATO_INVALIDO",
+          });
+          return;
+        }
+        conteudo = await sharp(conteudo, {
+          failOn: "error",
+          limitInputPixels: 40_000_000,
+        })
+          .rotate()
+          .resize({
+            width: 1280,
+            height: 1280,
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .webp({ quality: 82 })
+          .toBuffer();
+      } catch {
+        res.status(415).json({
+          erro: "O arquivo enviado não é uma imagem válida ou não pôde ser processado.",
+          codigo: "FORMATO_INVALIDO",
+        });
+        return;
+      }
+      contentType = "image/webp";
+    }
+
+    await armazenarMidiaExercicio(
+      id_exercicio,
+      tipoMidia,
+      conteudo,
+      contentType,
+    );
+    const url = urlMidiaExercicio(id_exercicio, tipoMidia, randomUUID());
+    await TreinoModel.atualizarMidiaExercicio(id_exercicio, tipoMidia, url);
+    res.json({ url, enviado: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function servirMidiaExercicio(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { id_exercicio, tipo } = req.params;
+    if (
+      !/^\d+$/.test(id_exercicio) ||
+      !ehTipoMidiaExercicio(tipo)
+    ) {
+      res.status(404).json({
+        erro: "Mídia não encontrada.",
+        codigo: "NAO_ENCONTRADO",
+      });
+      return;
+    }
+    const tipoMidia = tipo;
+    const exercicio = await TreinoModel.buscarMidiaExercicio(
+      id_exercicio,
+      tipoMidia,
+    );
+    if (
+      exercicio.rows.length === 0 ||
+      exercicio.rows[0].url?.split("?")[0] !==
+        urlMidiaExercicio(id_exercicio, tipoMidia)
+    ) {
+      res.status(404).json({
+        erro: "Mídia não encontrada.",
+        codigo: "NAO_ENCONTRADO",
+      });
+      return;
+    }
+    const media = await obterMidiaExercicio(id_exercicio, tipoMidia);
+    if (!media) {
+      res.status(404).json({
+        erro: "Mídia não encontrada no armazenamento.",
+        codigo: "NAO_ENCONTRADO",
+      });
+      return;
+    }
+    res.setHeader("Content-Type", media.contentType);
+    res.setHeader("Content-Length", media.conteudo.length);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.send(media.conteudo);
   } catch (err) {
     next(err);
   }

@@ -180,6 +180,7 @@ CREATE TABLE sessao_series (
   id_aluno_treino_exercicio   BIGINT       NOT NULL REFERENCES aluno_treino_exercicios(id),
   numero_serie                SMALLINT     NOT NULL,
   carga_real                  NUMERIC(6,2) NOT NULL DEFAULT 0,
+  repeticoes_real             SMALLINT,
   PRIMARY KEY (id_sessao, id_aluno_treino_exercicio, numero_serie)
 );
 

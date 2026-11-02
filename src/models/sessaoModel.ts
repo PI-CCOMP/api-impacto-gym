@@ -48,8 +48,9 @@ export async function buscarAtiva(idUsuario: number) {
 
 export async function buscarSeriesDaSessao(idSessao: number) {
   return pool.query(
-    `SELECT id_aluno_treino_exercicio, numero_serie, carga_real
-     FROM sessao_series WHERE id_sessao = $1`,
+    `SELECT ss.id_aluno_treino_exercicio, ss.numero_serie, ss.carga_real,
+            ss.repeticoes_real
+     FROM sessao_series ss WHERE ss.id_sessao = $1`,
     [idSessao],
   );
 }
@@ -60,6 +61,7 @@ export async function registrarSerie(dados: {
   idAluno_treinoExercicio: number;
   numeroSerie: number;
   cargaReal: number;
+  repeticoesReal: number;
 }) {
   const { rows } = await pool.query(
     `WITH exercicio_valido AS (
@@ -71,10 +73,14 @@ export async function registrarSerie(dados: {
        WHERE s.id = $1 AND s.id_aluno = $2 AND s.status = 'em_andamento'
          AND ate.id = $3 AND ate.numero_serie = $4
      ), serie_salva AS (
-       INSERT INTO sessao_series (id_sessao, id_aluno_treino_exercicio, numero_serie, carga_real)
-       SELECT $1, ev.id, ev.numero_serie, $5 FROM exercicio_valido ev
+       INSERT INTO sessao_series (
+         id_sessao, id_aluno_treino_exercicio, numero_serie, carga_real,
+         repeticoes_real
+       )
+       SELECT $1, ev.id, ev.numero_serie, $5, $6 FROM exercicio_valido ev
        ON CONFLICT (id_sessao, id_aluno_treino_exercicio, numero_serie)
-       DO UPDATE SET carga_real = EXCLUDED.carga_real
+       DO UPDATE SET carga_real = EXCLUDED.carga_real,
+                     repeticoes_real = EXCLUDED.repeticoes_real
        RETURNING id_aluno_treino_exercicio
      )
      UPDATE aluno_treino_exercicios ate SET carga_real = $5
@@ -87,6 +93,35 @@ export async function registrarSerie(dados: {
       dados.idAluno_treinoExercicio,
       dados.numeroSerie,
       dados.cargaReal,
+      dados.repeticoesReal,
+    ],
+  );
+  return rows[0] ?? null;
+}
+
+export async function removerSerie(dados: {
+  idSessao: number;
+  idUsuario: number;
+  idAluno_treinoExercicio: number;
+  numeroSerie: number;
+}) {
+  const { rows } = await pool.query(
+    `DELETE FROM sessao_series ss
+     USING sessoes_treino s, aluno_treino_exercicios ate
+     WHERE ss.id_sessao = s.id
+       AND ss.id_aluno_treino_exercicio = ate.id
+       AND s.id = $1
+       AND s.id_aluno = $2
+       AND s.status = 'em_andamento'
+       AND ate.id = $3
+       AND ate.numero_serie = $4
+       AND ate.id_aluno_treino = s.id_aluno_treino
+     RETURNING ss.id_aluno_treino_exercicio`,
+    [
+      dados.idSessao,
+      dados.idUsuario,
+      dados.idAluno_treinoExercicio,
+      dados.numeroSerie,
     ],
   );
   return rows[0] ?? null;
@@ -112,18 +147,26 @@ export async function inserirHistorico(
     idAluno_treino: number;
     idSessao: number;
     duracaoSegundos: number;
-    volumeTotal: number;
   },
 ) {
   return client.query(
     `INSERT INTO historico_treinos (id_aluno, id_aluno_treino, id_sessao, duracao_segundos, volume_total)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+     VALUES (
+       $1, $2, $3, $4,
+       COALESCE((
+         SELECT SUM(ss.carga_real * COALESCE(ss.repeticoes_real, ate.repeticoes))
+         FROM sessao_series ss
+         JOIN aluno_treino_exercicios ate
+           ON ate.id = ss.id_aluno_treino_exercicio
+         WHERE ss.id_sessao = $3
+       ), 0)
+     )
+     RETURNING id`,
     [
       dados.idUsuario,
       dados.idAluno_treino,
       dados.idSessao,
       dados.duracaoSegundos,
-      dados.volumeTotal,
     ],
   );
 }

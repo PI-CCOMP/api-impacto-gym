@@ -565,7 +565,7 @@ export async function verificarLoginAdmin(
       erroResposta(
         res,
         400,
-        "Email e código de 6 dígitos são obrigatórios.",
+        "E-mail válido, origem do login e código de 6 dígitos são obrigatórios.",
         "CAMPOS_OBRIGATORIOS",
       );
       return;

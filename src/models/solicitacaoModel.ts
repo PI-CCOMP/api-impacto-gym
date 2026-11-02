@@ -32,7 +32,7 @@ export async function listarDoAluno(idAluno: number) {
      JOIN exercicios e ON e.id = ate.id_exercicio
      JOIN aluno_treinos at ON at.id = ate.id_aluno_treino
      JOIN treinos t ON t.id = at.id_treino
-     WHERE s.id_aluno = $1
+     WHERE s.id_aluno = $1 AND s.status = 'aberto'
      ORDER BY s.criado_em DESC`,
     [idAluno],
   );

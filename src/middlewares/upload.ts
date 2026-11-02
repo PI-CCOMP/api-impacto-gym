@@ -3,6 +3,8 @@ import { Request, Response, NextFunction } from 'express'
 
 const MAX_PDF_MB = 10
 const MAX_IMG_MB = 5
+const MAX_EXERCISE_IMAGE_MB = 10
+const MAX_EXERCISE_VIDEO_MB = 100
 
 const storage = multer.memoryStorage()
 
@@ -31,6 +33,28 @@ export const uploadFoto = multer({
     }
   },
 }).single('foto')
+
+/** Upload de mídia de exercício — validação do conteúdo real no controller. */
+export function uploadMidiaExercicio(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const maxFileSize =
+    req.params.tipo === 'video'
+      ? MAX_EXERCISE_VIDEO_MB * 1024 * 1024
+      : MAX_EXERCISE_IMAGE_MB * 1024 * 1024
+  multer({
+    storage,
+    limits: { fileSize: maxFileSize, files: 1 },
+  }).single('arquivo')(req, res, (error: unknown) => {
+    if (error) {
+      handleMulterError(error, req, res, next)
+      return
+    }
+    next()
+  })
+}
 
 /** Wrapper para tratar erros do multer de forma padronizada */
 export function handleMulterError(

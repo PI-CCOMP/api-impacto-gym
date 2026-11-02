@@ -1,4 +1,5 @@
 import pool from "../config/database";
+import type { TipoMidiaExercicio } from "../services/exerciseMediaStorage";
 import type { PoolClient } from "pg";
 
 export async function buscarIdPorUsuarioId(idUsuario: number) {
@@ -9,7 +10,13 @@ export async function listarMeusTreinos(idAluno: number) {
   return pool.query(
     `SELECT
        at.id AS id_aluno_treino, t.id AS id_treino, t.nome AS nome_treino,
-       t.grupos_musculares, u.nome AS autor, at.ativo
+       t.grupos_musculares, u.nome AS autor, at.ativo,
+       (SELECT e.foto_url
+        FROM treino_exercicios te
+        JOIN exercicios e ON e.id = te.id_exercicio
+        WHERE te.id_treino = t.id
+        ORDER BY te.ordem
+        LIMIT 1) AS foto_primeiro_exercicio_url
      FROM aluno_treinos at
      JOIN treinos t ON t.id = at.id_treino
      JOIN usuarios u ON u.id = t.id_instrutor
@@ -121,6 +128,12 @@ export async function listarTreinos(filtros: {
   return pool.query(
     `SELECT
        t.id AS id_treino, t.id_instrutor, t.nome, t.grupos_musculares, u.nome AS autor,
+       (SELECT e.foto_url
+        FROM treino_exercicios te
+        JOIN exercicios e ON e.id = te.id_exercicio
+        WHERE te.id_treino = t.id
+        ORDER BY te.ordem
+        LIMIT 1) AS foto_primeiro_exercicio_url,
        COUNT(*) OVER() AS total
      FROM treinos t
      JOIN usuarios u ON u.id = t.id_instrutor
@@ -388,6 +401,37 @@ export async function atualizarExercicio(
       dados.imagemAtivacaoUrl,
       id,
     ],
+  );
+}
+
+export async function buscarMidiaExercicio(
+  id: string,
+  tipo: TipoMidiaExercicio,
+) {
+  const campo = {
+    foto: "foto_url",
+    video: "video_url",
+    ativacao: "imagem_ativacao_muscular_url",
+  }[tipo];
+  return pool.query<{ url: string | null }>(
+    `SELECT ${campo} AS url FROM exercicios WHERE id = $1`,
+    [id],
+  );
+}
+
+export async function atualizarMidiaExercicio(
+  id: string,
+  tipo: TipoMidiaExercicio,
+  url: string,
+) {
+  const campo = {
+    foto: "foto_url",
+    video: "video_url",
+    ativacao: "imagem_ativacao_muscular_url",
+  }[tipo];
+  return pool.query(
+    `UPDATE exercicios SET ${campo} = $1 WHERE id = $2 RETURNING id`,
+    [url, id],
   );
 }
 

@@ -5,10 +5,27 @@ import {
   criarExercicio,
   editarExercicio,
   excluirExercicio,
+  enviarMidiaExercicio,
+  servirMidiaExercicio,
 } from "../controllers/treinoController";
 import { authMiddleware, authorize } from "../middlewares/auth";
+import { uploadMidiaExercicio } from "../middlewares/upload";
 
 const router = Router();
+
+router.get(
+  "/:id_exercicio/midia/:tipo",
+  authMiddleware,
+  authorize("aluno", "admin", "instrutor", "recepcionista"),
+  servirMidiaExercicio,
+);
+router.patch(
+  "/:id_exercicio/midia/:tipo",
+  authMiddleware,
+  authorize("admin", "instrutor"),
+  uploadMidiaExercicio,
+  enviarMidiaExercicio,
+);
 
 // Admin e instrutor — catálogo e CRUD
 router.get(

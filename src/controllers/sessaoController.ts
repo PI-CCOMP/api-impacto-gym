@@ -100,7 +100,12 @@ export async function registrarSerie(
   try {
     const { id_sessao } = req.params;
     const idSessao = Number(id_sessao);
-    const { id_aluno_treino_exercicio, numero_serie, carga_real } = req.body;
+    const {
+      id_aluno_treino_exercicio,
+      numero_serie,
+      carga_real,
+      repeticoes_real,
+    } = req.body;
 
     if (
       !Number.isSafeInteger(idSessao) ||
@@ -112,10 +117,13 @@ export async function registrarSerie(
       typeof carga_real !== "number" ||
       !Number.isFinite(carga_real) ||
       carga_real < 0 ||
-      carga_real > 9999.99
+      carga_real > 9999.99 ||
+      !Number.isSafeInteger(repeticoes_real) ||
+      repeticoes_real < 1 ||
+      repeticoes_real > 999
     ) {
       res.status(422).json({
-        erro: "Sessão, exercício, série ou carga inválida.",
+        erro: "Sessão, exercício, série, carga ou repetições inválidas.",
         codigo: "DADOS_INVALIDOS",
       });
       return;
@@ -128,6 +136,7 @@ export async function registrarSerie(
       idAluno_treinoExercicio: id_aluno_treino_exercicio,
       numeroSerie: numero_serie,
       cargaReal: carga_real,
+      repeticoesReal: repeticoes_real,
     });
     if (!serie) {
       res.status(404).json({
@@ -138,6 +147,54 @@ export async function registrarSerie(
     }
 
     res.json({ registrado: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /sessoes/:id_sessao/series/:id_aluno_treino_exercicio/:numero_serie
+export async function removerSerie(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const idSessao = Number(req.params.id_sessao);
+    const idAluno_treinoExercicio = Number(
+      req.params.id_aluno_treino_exercicio,
+    );
+    const numeroSerie = Number(req.params.numero_serie);
+
+    if (
+      !Number.isSafeInteger(idSessao) ||
+      idSessao <= 0 ||
+      !Number.isSafeInteger(idAluno_treinoExercicio) ||
+      idAluno_treinoExercicio <= 0 ||
+      !Number.isSafeInteger(numeroSerie) ||
+      numeroSerie <= 0
+    ) {
+      res.status(422).json({
+        erro: "Sessão, exercício ou série inválidos.",
+        codigo: "DADOS_INVALIDOS",
+      });
+      return;
+    }
+
+    const serie = await SessaoModel.removerSerie({
+      idSessao,
+      idUsuario: req.user!.id_usuario,
+      idAluno_treinoExercicio,
+      numeroSerie,
+    });
+    if (!serie) {
+      res.status(404).json({
+        erro: "Série marcada ou sessão ativa não encontrada.",
+        codigo: "NAO_ENCONTRADO",
+      });
+      return;
+    }
+
+    res.json({ removida: true });
   } catch (err) {
     next(err);
   }
@@ -154,7 +211,7 @@ export async function finalizarSessao(
     client = await pool.connect();
     await client.query("BEGIN");
     const { id_sessao } = req.params;
-    const { duracao_segundos, volume_total } = req.body;
+    const { duracao_segundos } = req.body;
 
     const id_usuario = req.user!.id_usuario;
 
@@ -180,7 +237,6 @@ export async function finalizarSessao(
       idAluno_treino: rows[0].id_aluno_treino,
       idSessao: rows[0].id,
       duracaoSegundos: duracao_segundos ?? 0,
-      volumeTotal: volume_total ?? 0,
     });
 
     await client.query("COMMIT");
