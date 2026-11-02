@@ -112,17 +112,18 @@ export async function login(
 ): Promise<void> {
   const inicio = Date.now();
   try {
-    const { email, senha } = req.body;
+    const { email, senha, origem } = req.body;
     if (
       typeof email !== "string" ||
       typeof senha !== "string" ||
+      (origem !== "aluno" && origem !== "equipe") ||
       !email ||
       !senha
     ) {
       erroResposta(
         res,
         400,
-        "Email e senha são obrigatórios.",
+        "Origem, e-mail e senha são obrigatórios.",
         "CAMPOS_OBRIGATORIOS",
       );
       await aguardarTempoMinimo(inicio);
@@ -139,6 +140,20 @@ export async function login(
         401,
         "E-mail ou senha incorretos.",
         "CREDENCIAIS_INVALIDAS",
+      );
+      await aguardarTempoMinimo(inicio);
+      return;
+    }
+    const perfilCompativel =
+      origem === "aluno"
+        ? usuario.perfil === "aluno"
+        : ["admin", "instrutor", "recepcionista"].includes(usuario.perfil);
+    if (!perfilCompativel) {
+      erroResposta(
+        res,
+        403,
+        "Esta conta não pode entrar por este acesso.",
+        "PERFIL_INCOMPATIVEL",
       );
       await aguardarTempoMinimo(inicio);
       return;
@@ -211,8 +226,12 @@ export async function reenviarCodigoLoginAdmin(
 ): Promise<void> {
   const inicio = Date.now();
   try {
-    const { email } = req.body;
-    if (typeof email === "string" && validarEmail(email)) {
+    const { email, origem } = req.body;
+    if (
+      origem === "equipe" &&
+      typeof email === "string" &&
+      validarEmail(email)
+    ) {
       const usuario = await AuthModel.buscarUsuarioPorEmail(email.trim());
       if (
         usuario &&
@@ -535,8 +554,9 @@ export async function verificarLoginAdmin(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { email, codigo } = req.body;
+    const { email, codigo, origem } = req.body;
     if (
+      origem !== "equipe" ||
       typeof email !== "string" ||
       !validarEmail(email) ||
       typeof codigo !== "string" ||

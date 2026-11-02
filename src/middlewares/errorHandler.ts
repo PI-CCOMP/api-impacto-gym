@@ -1,27 +1,44 @@
 import { Request, Response, NextFunction } from "express";
 
+type ErrorDetails = {
+  status?: unknown;
+  message?: unknown;
+  expose?: unknown;
+  codigo?: unknown;
+};
+
 /**
  * Handler de erros centralizado.
  * NUNCA expõe stack trace ou mensagens internas ao cliente.
  */
 export function errorHandler(
-  err: any,
+  err: unknown,
   _req: Request,
   res: Response,
-  _next: NextFunction,
+  next: NextFunction,
 ): void {
+  const details: ErrorDetails =
+    typeof err === "object" && err !== null ? err : {};
   // Log interno apenas — nunca retorna ao cliente
-  console.error("[ERROR]", err?.message ?? err);
+  console.error(
+    "[ERROR]",
+    typeof details.message === "string" ? details.message : err,
+  );
 
-  const status: number = typeof err?.status === "number" ? err.status : 500;
+  const status = typeof details.status === "number" ? details.status : 500;
 
   // Apenas erros marcados como seguros para exposição são devolvidos
   const mensagem =
-    err?.expose === true && typeof err?.message === "string"
-      ? err.message
+    details.expose === true && typeof details.message === "string"
+      ? details.message
       : "Erro interno no servidor.";
 
+  void next;
   res
     .status(status)
-    .json({ erro: mensagem, codigo: err?.codigo ?? "ERRO_INTERNO" });
+    .json({
+      erro: mensagem,
+      codigo:
+        typeof details.codigo === "string" ? details.codigo : "ERRO_INTERNO",
+    });
 }

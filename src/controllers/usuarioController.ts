@@ -49,7 +49,22 @@ export async function listarUsuarios(
 ): Promise<void> {
   try {
     const busca = (req.query.busca as string) || "";
-    const perfil = (req.query.perfil as string) || "";
+    const perfilQuery =
+      typeof req.query.perfil === "string" ? req.query.perfil : "";
+    const perfis = perfilQuery
+      ? [...new Set(perfilQuery.split(",").map((value) => value.trim()))]
+      : [];
+    if (
+      perfis.some(
+        (perfil) => !PERFIS_VALIDOS.some((perfilValido) => perfilValido === perfil),
+      )
+    ) {
+      res.status(422).json({
+        erro: "Perfil inválido.",
+        codigo: "ENUM_INVALIDO",
+      });
+      return;
+    }
     const pagina = Math.max(1, parseInt(req.query.pagina as string) || 1);
     const porPagina = Math.min(
       50,
@@ -59,7 +74,7 @@ export async function listarUsuarios(
     const isInstrutor = req.user!.perfil === "instrutor";
 
     const { rows } = await UsuarioModel.listar({
-      perfil,
+      perfil: perfis,
       busca,
       isInstrutor,
       isRecepcionista: req.user!.perfil === "recepcionista",

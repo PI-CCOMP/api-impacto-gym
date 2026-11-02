@@ -188,6 +188,7 @@ CREATE TABLE historico_treinos (
   id               BIGSERIAL     PRIMARY KEY,
   id_aluno         BIGINT        NOT NULL REFERENCES usuarios(id),
   id_aluno_treino  BIGINT        NOT NULL REFERENCES aluno_treinos(id),
+  id_sessao        BIGINT        REFERENCES sessoes_treino(id),
   duracao_segundos INT           NOT NULL DEFAULT 0,
   volume_total     NUMERIC(10,2) NOT NULL DEFAULT 0,
   criado_em        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
@@ -219,5 +220,8 @@ CREATE INDEX idx_aluno_treinos_aluno    ON aluno_treinos(id_aluno);
 CREATE INDEX idx_aluno_treinos_treino   ON aluno_treinos(id_treino);
 CREATE INDEX idx_sessoes_aluno          ON sessoes_treino(id_aluno, status);
 CREATE INDEX idx_historico_aluno        ON historico_treinos(id_aluno, criado_em DESC);
+CREATE UNIQUE INDEX idx_historico_sessao
+  ON historico_treinos(id_sessao)
+  WHERE id_sessao IS NOT NULL;
 CREATE INDEX idx_solicitacoes_status    ON solicitacoes_auxilio(status);
 CREATE INDEX idx_avisos_criado_em       ON avisos(criado_em DESC);

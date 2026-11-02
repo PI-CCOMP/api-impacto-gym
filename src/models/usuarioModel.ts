@@ -2,7 +2,7 @@ import pool from "../config/database";
 import type { PoolClient } from "pg";
 
 export async function listar(filtros: {
-  perfil: string;
+  perfil: string[];
   busca: string;
   isInstrutor: boolean;
   isRecepcionista: boolean;
@@ -21,7 +21,7 @@ export async function listar(filtros: {
      FROM usuarios u
      LEFT JOIN alunos a ON a.id_usuario = u.id
      LEFT JOIN usuarios ui ON ui.id = a.id_instrutor
-     WHERE ($1 = '' OR u.perfil = $1::perfil_usuario)
+     WHERE (cardinality($1::perfil_usuario[]) = 0 OR u.perfil = ANY($1::perfil_usuario[]))
        AND ($2 = '' OR u.nome ILIKE '%' || $2 || '%' OR u.cpf ILIKE '%' || $2 || '%')
       AND ($3 = false OR a.id_instrutor = $4)
       AND ($7 = false OR u.perfil = 'aluno')
@@ -66,7 +66,7 @@ export async function existePorId(id: string) {
 
 export async function buscarTreinosDoAluno(idAluno: number) {
   return pool.query(
-    `SELECT at.id AS id_aluno_treino, t.nome AS nome_treino
+    `SELECT at.id AS id_aluno_treino, t.id AS id_treino, t.nome AS nome_treino
      FROM aluno_treinos at JOIN treinos t ON t.id = at.id_treino
      WHERE at.id_aluno = $1 AND at.ativo = true`,
     [idAluno],

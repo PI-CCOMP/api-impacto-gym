@@ -34,12 +34,16 @@ export const uploadFoto = multer({
 
 /** Wrapper para tratar erros do multer de forma padronizada */
 export function handleMulterError(
-  err: any,
+  err: unknown,
   _req: Request,
   res: Response,
   next: NextFunction
 ): void {
-  if (err instanceof multer.MulterError || err?.message) {
+  if (err instanceof multer.MulterError) {
+    res.status(400).json({ erro: err.message, codigo: 'UPLOAD_INVALIDO' })
+    return
+  }
+  if (err instanceof Error) {
     res.status(400).json({ erro: err.message, codigo: 'UPLOAD_INVALIDO' })
     return
   }

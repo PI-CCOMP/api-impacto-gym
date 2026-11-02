@@ -178,6 +178,7 @@ export async function finalizarSessao(
     const { rows: histRows } = await SessaoModel.inserirHistorico(client, {
       idUsuario: id_usuario,
       idAluno_treino: rows[0].id_aluno_treino,
+      idSessao: rows[0].id,
       duracaoSegundos: duracao_segundos ?? 0,
       volumeTotal: volume_total ?? 0,
     });

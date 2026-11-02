@@ -19,6 +19,7 @@ services:
       - ./migrations/005_email_code_attempts.sql:/docker-entrypoint-initdb.d/006-email-code-attempts.sql:ro
       - ./migrations/006_medical_lists_and_pending_email.sql:/docker-entrypoint-initdb.d/007-medical-lists-and-pending-email.sql:ro
       - ./migrations/007_medical_review_private_photos.sql:/docker-entrypoint-initdb.d/008-medical-review-private-photos.sql:ro
+      - ./migrations/008_history_session_reference.sql:/docker-entrypoint-initdb.d/009-history-session-reference.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U impacto_gym -d impacto_gym"]
       interval: 5s

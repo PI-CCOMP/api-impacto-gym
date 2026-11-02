@@ -1,4 +1,5 @@
 import pool from "../config/database";
+import type { PoolClient } from "pg";
 
 export async function buscarIdPorUsuarioId(idUsuario: number) {
   const { rows } = await pool.query("SELECT id FROM usuarios WHERE id = $1", [
@@ -92,7 +93,7 @@ export async function registrarSerie(dados: {
 }
 
 export async function finalizar(
-  client: any,
+  client: PoolClient,
   idSessao: string,
   idUsuario: number,
 ) {
@@ -105,20 +106,22 @@ export async function finalizar(
 }
 
 export async function inserirHistorico(
-  client: any,
+  client: PoolClient,
   dados: {
     idUsuario: number;
     idAluno_treino: number;
+    idSessao: number;
     duracaoSegundos: number;
     volumeTotal: number;
   },
 ) {
   return client.query(
-    `INSERT INTO historico_treinos (id_aluno, id_aluno_treino, duracao_segundos, volume_total)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
+    `INSERT INTO historico_treinos (id_aluno, id_aluno_treino, id_sessao, duracao_segundos, volume_total)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
     [
       dados.idUsuario,
       dados.idAluno_treino,
+      dados.idSessao,
       dados.duracaoSegundos,
       dados.volumeTotal,
     ],

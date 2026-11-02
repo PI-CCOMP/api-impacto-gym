@@ -1,4 +1,5 @@
 import pool from "../config/database";
+import type { PoolClient } from "pg";
 
 export async function buscarIdPorUsuarioId(idUsuario: number) {
   return pool.query("SELECT id FROM usuarios WHERE id = $1", [idUsuario]);
@@ -56,7 +57,7 @@ export async function verificarCompatibilidadeInstrutorTreino(
 }
 
 export async function atribuirInstrutorSeNulo(
-  client: any,
+  client: PoolClient,
   idAluno: number,
   idInstrutor: number,
 ) {
@@ -73,6 +74,7 @@ export async function buscarExerciciosDoAluno_treino(idAluno_treino: string) {
     `SELECT
        e.id AS id_exercicio, e.nome, e.foto_url, e.video_url, e.imagem_ativacao_muscular_url, e.grupo_muscular,
        json_agg(json_build_object(
+         'id_aluno_treino_exercicio', ate.id,
          'numero', ate.numero_serie,
          'repeticoes', ate.repeticoes,
          'carga_sugerida', ate.carga_sugerida,
@@ -118,7 +120,7 @@ export async function listarTreinos(filtros: {
 }) {
   return pool.query(
     `SELECT
-       t.id AS id_treino, t.nome, t.grupos_musculares, u.nome AS autor,
+       t.id AS id_treino, t.id_instrutor, t.nome, t.grupos_musculares, u.nome AS autor,
        COUNT(*) OVER() AS total
      FROM treinos t
      JOIN usuarios u ON u.id = t.id_instrutor
@@ -159,7 +161,8 @@ export async function verificarDonoTreino(
 
 export async function buscarExerciciosDeTreino(idTreino: string) {
   return pool.query(
-    `SELECT e.id AS id_exercicio, e.nome, e.foto_url, e.grupo_muscular
+    `SELECT e.id AS id_exercicio, e.nome, e.foto_url, e.grupo_muscular,
+            te.series, te.repeticoes, te.carga_sugerida, te.tempo_descanso
      FROM treino_exercicios te JOIN exercicios e ON e.id = te.id_exercicio
      WHERE te.id_treino = $1 ORDER BY te.ordem`,
     [idTreino],
@@ -183,7 +186,7 @@ export async function buscarGruposMusculares(ids: number[]) {
 }
 
 export async function inserirTreino(
-  client: any,
+  client: PoolClient,
   nome: string,
   grupos: string[],
   idInstrutor: number,
@@ -195,7 +198,7 @@ export async function inserirTreino(
 }
 
 export async function inserirTreinoExercicio(
-  client: any,
+  client: PoolClient,
   dados: {
     idTreino: number;
     idExercicio: number;
@@ -222,7 +225,7 @@ export async function inserirTreinoExercicio(
 }
 
 export async function atualizarTreino(
-  client: any,
+  client: PoolClient,
   idTreino: string,
   nome: string,
   grupos: string[],
@@ -233,7 +236,10 @@ export async function atualizarTreino(
   );
 }
 
-export async function excluirExerciciosDeTreino(client: any, idTreino: string) {
+export async function excluirExerciciosDeTreino(
+  client: PoolClient,
+  idTreino: string,
+) {
   return client.query("DELETE FROM treino_exercicios WHERE id_treino = $1", [
     idTreino,
   ]);
@@ -263,7 +269,7 @@ export async function verificarAlunoDoInstrutor(
 }
 
 export async function vincularAlunoATreino(
-  client: any,
+  client: PoolClient,
   idAluno: number,
   idTreino: string,
 ) {
@@ -281,7 +287,7 @@ export async function buscarExerciciosModeloTreino(idTreino: string) {
 }
 
 export async function inserirAluno_treinoExercicio(
-  client: any,
+  client: PoolClient,
   dados: {
     idAluno_treino: number;
     idExercicio: number;

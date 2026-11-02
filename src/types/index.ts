@@ -106,10 +106,8 @@ export type StatusSolicitacao = "aberto" | "atendido" | "cancelado";
 export type StatusSessao = "em_andamento" | "finalizado" | "abandonado";
 
 //  Extensão do Request do Express
-declare global {
-  namespace Express {
-    interface Request {
-      user?: UsuarioToken;
-    }
+declare module "express-serve-static-core" {
+  interface Request {
+    user?: UsuarioToken;
   }
 }

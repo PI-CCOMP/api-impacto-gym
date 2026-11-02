@@ -1,10 +1,9 @@
 import { Router } from 'express'
 import {
-  meusTreinos, exerciciosDoTreino, buscarExercicio,
+  meusTreinos, exerciciosDoTreino,
   listarTreinos, buscarTreino,
   criarTreino, editarTreino, excluirTreino,
   vincularAluno, desvincularAluno,
-  listarExercicios,
 } from '../controllers/treinoController'
 import { authMiddleware, authorize } from '../middlewares/auth'
 

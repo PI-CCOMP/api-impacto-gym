@@ -3,6 +3,19 @@ import pool from "../config/database";
 import * as TreinoModel from "../models/treinoModel";
 import { GRUPOS_MUSCULARES_VALIDOS } from "../types";
 
+type ExercicioDoTreinoInput = {
+  id_exercicio: number;
+  series: number;
+  repeticoes: number;
+  carga_sugerida?: number;
+  tempo_descanso?: number;
+};
+
+type DadosTreinoInput = {
+  nome?: string;
+  exercicios?: ExercicioDoTreinoInput[];
+};
+
 // GET /treinos/meus (aluno)
 export async function meusTreinos(
   req: Request,
@@ -126,7 +139,11 @@ export async function listarTreinos(
 
     const total = rows.length > 0 ? Number(rows[0].total) : 0;
     res.json({
-      dados: rows.map(({ total: _, ...r }) => r),
+      dados: rows.map((row) => {
+        const dado = { ...row };
+        delete dado.total;
+        return dado;
+      }),
       total,
       pagina,
       por_pagina: porPagina,
@@ -185,8 +202,13 @@ export async function criarTreino(
 ): Promise<void> {
   const client = await pool.connect();
   try {
-    const { nome, exercicios } = req.body;
-    if (!nome || !Array.isArray(exercicios) || exercicios.length < 3) {
+    const { nome, exercicios } = req.body as DadosTreinoInput;
+    if (
+      typeof nome !== "string" ||
+      !nome.trim() ||
+      !Array.isArray(exercicios) ||
+      exercicios.length < 3
+    ) {
       res.status(422).json({
         erro: "Nome e no mínimo 3 exercícios são obrigatórios.",
         codigo: "VALIDACAO",
@@ -203,7 +225,7 @@ export async function criarTreino(
       return;
     }
 
-    const ids = exercicios.map((e: any) => e.id_exercicio);
+    const ids = exercicios.map((exercicio) => exercicio.id_exercicio);
     const { rows: gmRows } = await TreinoModel.buscarGruposMusculares(ids);
     const grupos = gmRows.map((r) => r.grupo_muscular);
 
@@ -249,9 +271,14 @@ export async function editarTreino(
   const client = await pool.connect();
   try {
     const { id_treino } = req.params;
-    const { nome, exercicios } = req.body;
+    const { nome, exercicios } = req.body as DadosTreinoInput;
 
-    if (!nome || !Array.isArray(exercicios) || exercicios.length < 3) {
+    if (
+      typeof nome !== "string" ||
+      !nome.trim() ||
+      !Array.isArray(exercicios) ||
+      exercicios.length < 3
+    ) {
       res.status(422).json({
         erro: "Nome e no mínimo 3 exercícios são obrigatórios.",
         codigo: "VALIDACAO",
@@ -272,7 +299,7 @@ export async function editarTreino(
       }
     }
 
-    const ids = exercicios.map((e: any) => e.id_exercicio);
+    const ids = exercicios.map((exercicio) => exercicio.id_exercicio);
     const { rows: gmRows } = await TreinoModel.buscarGruposMusculares(ids);
     const grupos = gmRows.map((r) => r.grupo_muscular);
 
@@ -503,7 +530,7 @@ export async function listarExercicios(
 
     if (
       grupoMuscular &&
-      !GRUPOS_MUSCULARES_VALIDOS.includes(grupoMuscular as any)
+      !GRUPOS_MUSCULARES_VALIDOS.some((grupo) => grupo === grupoMuscular)
     ) {
       res
         .status(422)
@@ -519,7 +546,11 @@ export async function listarExercicios(
     });
     const total = rows.length > 0 ? Number(rows[0].total) : 0;
     res.json({
-      dados: rows.map(({ total: _, ...r }) => r),
+      dados: rows.map((row) => {
+        const dado = { ...row };
+        delete dado.total;
+        return dado;
+      }),
       total,
       pagina,
       por_pagina: porPagina,
@@ -557,7 +588,11 @@ export async function criarExercicio(
       });
       return;
     }
-    if (!GRUPOS_MUSCULARES_VALIDOS.includes(grupo_muscular as any)) {
+    if (
+      !GRUPOS_MUSCULARES_VALIDOS.some(
+        (grupo) => grupo === grupo_muscular,
+      )
+    ) {
       res
         .status(422)
         .json({ erro: "Grupo muscular inválido.", codigo: "ENUM_INVALIDO" });
@@ -606,7 +641,9 @@ export async function editarExercicio(
 
     if (
       grupo_muscular &&
-      !GRUPOS_MUSCULARES_VALIDOS.includes(grupo_muscular as any)
+      !GRUPOS_MUSCULARES_VALIDOS.some(
+        (grupo) => grupo === grupo_muscular,
+      )
     ) {
       res
         .status(422)

@@ -48,8 +48,7 @@ export async function buscarExerciciosDoHistorico(idHistorico: string) {
      FROM sessao_series ss
      JOIN aluno_treino_exercicios ate ON ate.id = ss.id_aluno_treino_exercicio
      JOIN exercicios e ON e.id = ate.id_exercicio
-     JOIN sessoes_treino st ON st.id = ss.id_sessao
-     JOIN historico_treinos ht ON ht.id_aluno_treino = st.id_aluno_treino
+     JOIN historico_treinos ht ON ht.id_sessao = ss.id_sessao
      WHERE ht.id = $1
      GROUP BY e.id, e.nome, e.foto_url`,
     [idHistorico],
