@@ -6,6 +6,8 @@ export async function listar(filtros: {
   busca: string;
   isInstrutor: boolean;
   isRecepcionista: boolean;
+  semInstrutor: boolean;
+  paraVincularTreino: boolean;
   instrutorId: number;
   porPagina: number;
   offset: number;
@@ -16,6 +18,7 @@ export async function listar(filtros: {
       a.status, a.deficiencia::text[] AS deficiencia,
       a.restricao_medica::text[] AS restricao_medica,
       a.revisao_medica_pendente, a.prazo_revisao_medica,
+      a.id_instrutor,
        ui.nome AS instrutor_vinculado,
        COUNT(*) OVER() AS total
      FROM usuarios u
@@ -23,7 +26,18 @@ export async function listar(filtros: {
      LEFT JOIN usuarios ui ON ui.id = a.id_instrutor
      WHERE (cardinality($1::perfil_usuario[]) = 0 OR u.perfil = ANY($1::perfil_usuario[]))
        AND ($2 = '' OR u.nome ILIKE '%' || $2 || '%' OR u.cpf ILIKE '%' || $2 || '%')
-      AND ($3 = false OR a.id_instrutor = $4)
+      AND (
+        $3 = false
+        OR (
+          u.perfil = 'aluno'
+          AND a.status = 'ativo'
+          AND (
+            ($9::boolean AND (a.id_instrutor IS NULL OR a.id_instrutor = $4))
+            OR (NOT $9::boolean AND $8::boolean AND a.id_instrutor IS NULL)
+            OR (NOT $9::boolean AND NOT $8::boolean AND a.id_instrutor = $4)
+          )
+        )
+      )
       AND ($7 = false OR u.perfil = 'aluno')
      ORDER BY u.nome ASC
      LIMIT $5 OFFSET $6`,
@@ -35,6 +49,8 @@ export async function listar(filtros: {
       filtros.porPagina,
       filtros.offset,
       filtros.isRecepcionista,
+      filtros.semInstrutor,
+      filtros.paraVincularTreino,
     ],
   );
 }

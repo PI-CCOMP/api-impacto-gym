@@ -48,10 +48,14 @@ export async function listarUsuarios(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const busca = (req.query.busca as string) || "";
-    const perfilQuery =
-      typeof req.query.perfil === "string" ? req.query.perfil : "";
-    const perfis = perfilQuery
+    const isInstrutor = req.user!.perfil === "instrutor";
+    const busca = isInstrutor ? "" : (req.query.busca as string) || "";
+    const perfilQuery = !isInstrutor && typeof req.query.perfil === "string"
+      ? req.query.perfil
+      : "";
+    const perfis = isInstrutor
+      ? ["aluno"]
+      : perfilQuery
       ? [...new Set(perfilQuery.split(",").map((value) => value.trim()))]
       : [];
     if (
@@ -71,13 +75,17 @@ export async function listarUsuarios(
       parseInt(req.query.por_pagina as string) || 10,
     );
     const offset = (pagina - 1) * porPagina;
-    const isInstrutor = req.user!.perfil === "instrutor";
+    const semInstrutor = isInstrutor;
+    const paraVincularTreino =
+      isInstrutor && req.query.para_treino === "true";
 
     const { rows } = await UsuarioModel.listar({
       perfil: perfis,
       busca,
       isInstrutor,
       isRecepcionista: req.user!.perfil === "recepcionista",
+      semInstrutor,
+      paraVincularTreino,
       instrutorId: req.user!.id_usuario,
       porPagina,
       offset,
@@ -93,7 +101,7 @@ export async function listarUsuarios(
         perfil: r.perfil,
         status: r.status ?? null,
         ...(isAdmin ||
-        isInstrutor ||
+        (isInstrutor && Number(r.id_instrutor) === req.user!.id_usuario) ||
         (isRecepcionista &&
           (r.status === "pendente" || r.revisao_medica_pendente))
           ? {
@@ -206,10 +214,15 @@ export async function buscarUsuario(
       return;
     }
 
+    const isInstrutorResponsavel =
+      Number(r.id_instrutor) === req.user!.id_usuario;
+    const isAlunoSemInstrutorAtivo =
+      r.id_instrutor === null && r.status === "ativo";
     if (
       req.user!.perfil === "instrutor" &&
       r.perfil === "aluno" &&
-      r.id_instrutor !== req.user!.id_usuario
+      !isInstrutorResponsavel &&
+      !isAlunoSemInstrutorAtivo
     ) {
       res
         .status(403)
@@ -233,7 +246,7 @@ export async function buscarUsuario(
     const podeVerDadosMedicos =
       req.user!.perfil === "admin" ||
       (req.user!.perfil === "instrutor" &&
-        r.id_instrutor === req.user!.id_usuario) ||
+        isInstrutorResponsavel) ||
       (req.user!.perfil === "recepcionista" &&
         (r.status === "pendente" || r.revisao_medica_pendente));
 
@@ -786,7 +799,11 @@ export async function atualizarInstrutorDoAluno(
 
     const { rows: instAtualRows } =
       await UsuarioModel.buscarInstrutorDoAluno(id);
-    const instrutorAtual = instAtualRows[0]?.id_instrutor ?? null;
+    const instrutorAtualId = instAtualRows[0]?.id_instrutor;
+    const instrutorAtual =
+      instrutorAtualId === null || instrutorAtualId === undefined
+        ? null
+        : Number(instrutorAtualId);
     let id_instrutor: number | null;
 
     if (isInstrutor) {
